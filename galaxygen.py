@@ -72,6 +72,7 @@ class GalaxyConfig:
     # ---- edge parameters ----
     l_max: float = 9.0          # maximum edge length (hard limit)
     target_degree: float = 4.0  # desired average node degree (approximate)
+    node_connection_chance: float = 1.0  # probability [0, 1] that a node is eligible for any edges
 
     # ---- spiral-arm parameters ----
     n_arms: int = 4             # number of logarithmic spiral arms
@@ -412,6 +413,22 @@ class GalaxyGenerator:
         if len(valid_pairs) == 0:
             print("  WARNING: all candidate pairs cross the core.")
             return pd.DataFrame(columns=["source", "target", "length", "weight"])
+
+        # ---- node-eligibility filter ----
+        # Each node is independently eligible to participate in edges with
+        # probability node_connection_chance.  Pairs where either endpoint is
+        # ineligible are dropped so that ineligible nodes remain isolated.
+        if cfg.node_connection_chance < 1.0:
+            connectable = self._rng.random(n) < cfg.node_connection_chance
+            both_ok = connectable[valid_pairs[:, 0]] & connectable[valid_pairs[:, 1]]
+            valid_pairs = valid_pairs[both_ok]
+            n_eligible = int(connectable.sum())
+            print(f"  {n_eligible:,} / {n} nodes eligible "
+                  f"({cfg.node_connection_chance:.1%} chance); "
+                  f"{len(valid_pairs):,} pairs remain after eligibility filter.")
+            if len(valid_pairs) == 0:
+                print("  WARNING: no valid pairs after eligibility filter.")
+                return pd.DataFrame(columns=["source", "target", "length", "weight"])
 
         # ---- shuffle and select ----
         if len(valid_pairs) < target_edges:

@@ -74,6 +74,15 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="D",
         help="Target average node degree (approximate).",
     )
+    p.add_argument(
+        "--node_connection_chance", type=float, default=1.0,
+        metavar="P",
+        help=(
+            "Probability [0, 1] that any given node is eligible to have edge "
+            "connections.  Nodes that are not selected remain fully isolated.  "
+            "1.0 = all nodes may connect (default); 0.3 = ~30%% of nodes connect."
+        ),
+    )
 
     # ── Spiral-arm parameters ─────────────────────────────────────────────
     p.add_argument(
@@ -137,20 +146,21 @@ def main() -> None:
     args   = parser.parse_args()
 
     cfg = GalaxyConfig(
-        n_nodes       = args.n_nodes,
-        r_disk        = args.r_disk,
-        r_core        = args.r_core,
-        l_max         = args.l_max,
-        target_degree = args.target_degree,
-        n_arms        = args.n_arms,
-        arm_b         = args.arm_b,
-        arm_sigma     = args.arm_sigma,
-        arm_base      = args.arm_base,
-        r_scale       = args.r_scale,
-        boost         = args.boost,
-        seed          = args.seed,
-        out_dir       = args.out_dir,
-        write_gexf    = not args.no_gexf,
+        n_nodes                = args.n_nodes,
+        r_disk                 = args.r_disk,
+        r_core                 = args.r_core,
+        l_max                  = args.l_max,
+        target_degree          = args.target_degree,
+        node_connection_chance = args.node_connection_chance,
+        n_arms                 = args.n_arms,
+        arm_b                  = args.arm_b,
+        arm_sigma              = args.arm_sigma,
+        arm_base               = args.arm_base,
+        r_scale                = args.r_scale,
+        boost                  = args.boost,
+        seed                   = args.seed,
+        out_dir                = args.out_dir,
+        write_gexf             = not args.no_gexf,
     )
 
     # Print config so the user can confirm parameters before waiting
