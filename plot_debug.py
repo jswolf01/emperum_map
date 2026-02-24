@@ -21,6 +21,15 @@ Usage
     # Colour nodes by radius instead
     python plot_debug.py --no_edges --color_by r
 
+    # Uniform node colour (no gradient)
+    python plot_debug.py --color_by none --node_color "#ffffff"
+
+    # Custom gradient: arm stars bright cyan, inter-arm very dark
+    python plot_debug.py --gradient_low_color "#00ffff" --gradient_high_color "#050005"
+
+    # Custom edge appearance
+    python plot_debug.py --edge_color "#44aaff" --edge_width 0.8 --edge_alpha 0.5
+
     # Save to PNG instead of opening an interactive window
     python plot_debug.py --no_edges --save galaxy.png
 
@@ -40,6 +49,7 @@ import os
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import pandas as pd
 from matplotlib.collections import LineCollection
@@ -59,28 +69,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # Output location
-    p.add_argument("--out_dir",      default="output",
+    p.add_argument("--out_dir",  default="output",
                    help="Directory containing nodes.csv and edges.csv.")
-    p.add_argument("--save",         default=None, metavar="FILE",
+    p.add_argument("--save",     default=None, metavar="FILE",
                    help="Save figure to FILE (png/pdf/svg) instead of displaying.")
 
     # Cosmetic toggles
-    p.add_argument("--no_edges",     action="store_true",
+    p.add_argument("--no_edges", action="store_true",
                    help="Skip drawing edges (much faster for large graphs).")
-    p.add_argument("--color_by",     choices=["arm_dist", "r", "none"],
+    p.add_argument("--color_by", choices=["arm_dist", "r", "none"],
                    default="arm_dist",
-                   help="Node colouring scheme.")
-    p.add_argument("--node_size",    type=float, default=1.5,
+                   help="Node colouring scheme: arm_dist (gradient by arm proximity), "
+                        "r (gradient by radius), or none (uniform colour).")
+
+    # Node appearance
+    p.add_argument("--node_size",  type=float, default=1.5,
                    help="Scatter marker size.")
-    p.add_argument("--edge_alpha",   type=float, default=0.35,
+    p.add_argument("--node_color", default="#aaccff",
+                   help="Uniform node colour used when --color_by none.")
+    p.add_argument("--gradient_low_color",  default="#ffe8c0",
+                   help="Gradient colour at low data values "
+                        "(close-to-arm for arm_dist; inner disk for r).")
+    p.add_argument("--gradient_high_color", default="#0d000f",
+                   help="Gradient colour at high data values "
+                        "(far-from-arm for arm_dist; outer disk for r).")
+
+    # Edge appearance
+    p.add_argument("--edge_alpha", type=float, default=0.35,
                    help="Edge line alpha (0=invisible, 1=solid).")
+    p.add_argument("--edge_color", default="#2244aa",
+                   help="Edge line colour (any matplotlib colour string).")
+    p.add_argument("--edge_width", type=float, default=0.4,
+                   help="Edge line width in points.")
 
     # Spatial parameters – must match the generation run
-    p.add_argument("--r_disk",       type=float, default=100.0)
-    p.add_argument("--r_core",       type=float, default=15.0)
-    p.add_argument("--n_arms",       type=int,   default=4)
-    p.add_argument("--arm_b",        type=float, default=0.35)
-    p.add_argument("--r_arm_start",  type=float, default=3.0)
+    p.add_argument("--r_disk",      type=float, default=100.0)
+    p.add_argument("--r_core",      type=float, default=15.0)
+    p.add_argument("--n_arms",      type=int,   default=4)
+    p.add_argument("--arm_b",       type=float, default=0.35)
+    p.add_argument("--r_arm_start", type=float, default=3.0)
 
     return p
 
@@ -151,18 +178,14 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
 
     # ── Edges ─────────────────────────────────────────────────────────────
     if not args.no_edges and len(edges) > 0:
-        xy = nodes[["x", "y"]].values
-        # Ensure integer indices even when loaded from CSV (pandas may read as float)
+        xy  = nodes[["x", "y"]].values
         src = edges["source"].values.astype(int)
         tgt = edges["target"].values.astype(int)
-        segs = [
-            [xy[s], xy[t]]
-            for s, t in zip(src, tgt)
-        ]
+        segs = [[xy[s], xy[t]] for s, t in zip(src, tgt)]
         lc = LineCollection(
             segs,
-            colors="#2244aa",
-            linewidths=0.4,
+            colors=args.edge_color,
+            linewidths=args.edge_width,
             alpha=args.edge_alpha,
             zorder=5,
         )
@@ -172,17 +195,24 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
     x = nodes["x"].values
     y = nodes["y"].values
 
+    # Build gradient colormap from the two user-supplied endpoint colours.
+    # Default: low values (close-to-arm) → warm bright, high → very dark,
+    # so spiral-arm stars stand out prominently against the background.
+    grad_cmap = LinearSegmentedColormap.from_list(
+        "user_gradient", [args.gradient_low_color, args.gradient_high_color]
+    )
+
     if args.color_by == "arm_dist" and "arm_dist" in nodes.columns:
-        c    = nodes["arm_dist"].values
-        cmap = "plasma"
+        c      = nodes["arm_dist"].values
+        cmap   = grad_cmap
         clabel = "Arm distance"
     elif args.color_by == "r" and "r" in nodes.columns:
-        c    = nodes["r"].values
-        cmap = "viridis"
+        c      = nodes["r"].values
+        cmap   = grad_cmap
         clabel = "Radius"
     else:
-        c    = "#aaccff"
-        cmap = None
+        c      = args.node_color
+        cmap   = None
         clabel = None
 
     sc = ax.scatter(
@@ -201,7 +231,6 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
         plt.setp(plt.getp(cbar.ax.axes, "yticklabels"), color="white")
 
     # ── Decorations ───────────────────────────────────────────────────────
-    n_edges_shown = len(edges) if not args.no_edges else 0
     title = (
         f"Emperum Galaxy  —  "
         f"{len(nodes):,} systems  |  {len(edges):,} L-ways"
@@ -213,7 +242,6 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
         spine.set_edgecolor("#2a2a3a")
     ax.tick_params(colors="#555566", labelsize=7)
 
-    # Legend patches
     legend_patches = [
         mpatches.Patch(facecolor="#3a3a5c", edgecolor="#3a3a5c",
                        label=f"Disk boundary (r={args.r_disk})"),
@@ -223,10 +251,10 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
     ]
     if not args.no_edges:
         legend_patches.append(
-            mpatches.Patch(facecolor="#2244aa", label="L-way edges")
+            mpatches.Patch(facecolor=args.edge_color, label="L-way edges")
         )
 
-    leg = ax.legend(
+    ax.legend(
         handles=legend_patches,
         loc="upper right",
         fontsize=8,
