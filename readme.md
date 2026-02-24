@@ -19,6 +19,9 @@ python plot_debug.py
 
 # Save the plot to a PNG
 python plot_debug.py --save galaxy.png
+
+# Save the plot as a scalable SVG
+python plot_debug.py --svg galaxy.svg
 ```
 
 ---
@@ -29,46 +32,46 @@ python plot_debug.py --save galaxy.png
 
 | Argument | Default | Description |
 |---|---|---|
-| `--n_nodes` | `5000` | Number of star-system nodes to generate. |
-| `--r_disk` | `100.0` | Outer disk boundary radius (arbitrary units). |
-| `--r_core` | `15.0` | Forbidden core radius. No nodes are placed inside it and no edge may cross it. |
+| `--n_nodes` | `5000` | Total number of star-system nodes. More nodes = a denser, richer map but slower generation and larger output files. |
+| `--r_disk` | `100.0` | Outer disk boundary radius (arbitrary units — think of it as the galactic edge). No nodes are placed beyond this radius. |
+| `--r_core` | `15.0` | Radius of the forbidden galactic core. No nodes are placed inside it, and no hyperspace lane may pass through it. Increase to create a larger empty centre; decrease for a busier core region. |
 
-### Edges
+### Edges (hyperspace lanes)
 
 | Argument | Default | Description |
 |---|---|---|
-| `--l_max` | `9.0` | Maximum edge (L-way hyperspace lane) length. Pairs farther apart than this are never connected. |
-| `--target_degree` | `4.0` | Approximate target average node degree. Controls how many edges are drawn in total (`≈ N × D / 2`). |
-| `--node_connection_chance` | `1.0` | Probability `[0, 1]` that any given node is eligible to have edge connections at all. Ineligible nodes remain fully isolated. `1.0` = all nodes may connect; `0.3` = roughly 30 % of nodes connect, 70 % are isolated. Edge density among connected nodes is driven purely by local node density (spiral arm placement has no additional effect). |
+| `--l_max` | `9.0` | Hard maximum length for a single hyperspace lane. Any pair of nodes farther apart than this is **never** connected, regardless of other settings. Increase to allow longer routes and a more connected graph; decrease to force shorter hops and more localised clusters. Must be large enough relative to local node spacing for lanes to exist at all. |
+| `--target_degree` | `4.0` | **Edge budget control.** Sets the total number of edges drawn: `total_edges ≈ N × D / 2`. At the default of 4 with 5 000 nodes that is ~10 000 edges. The generator finds all geometrically valid candidate pairs (within `l_max`, not crossing the core), shuffles them, and takes the first `total_edges` at random. This means the **average** node degree will be close to D, but individual nodes vary — nodes in dense spiral arms tend to have more connections than inter-arm nodes because they have more neighbours within `l_max`. Raise to increase overall connectivity; lower for a sparser network. |
+| `--node_connection_chance` | `1.0` | Fraction of nodes that are eligible to receive **any** lanes at all. Each node independently passes a random check at this probability; nodes that fail are left completely isolated (no lanes in or out). `1.0` = every node can connect (default). `0.4` = roughly 40 % of nodes connect, 60 % are isolated lone stars. Does not change how connected eligible nodes are — only whether a node participates at all. |
 
 ### Spiral arms
 
 | Argument | Default | Description |
 |---|---|---|
-| `--n_arms` | `4` | Number of logarithmic spiral arms. |
-| `--arm_b` | `0.35` | Spiral tightness. Larger values produce more open, loosely wound arms. |
-| `--arm_sigma` | `5.5` | Gaussian half-width of each arm (same units as radii). Controls how tightly nodes cluster around the arm centreline. |
-| `--arm_base` | `0.15` | Baseline acceptance probability far from any arm `(0, 1)`. Higher values fill the inter-arm space more evenly. |
+| `--n_arms` | `4` | Number of logarithmic spiral arms evenly distributed around the disk. Typical real spirals have 2–4 arms. |
+| `--arm_b` | `0.35` | Controls how tightly the arms are wound. The arm follows `r = r_arm_start × exp(b × φ)`. Smaller values (e.g. `0.2`) create tightly coiled arms that make many revolutions; larger values (e.g. `0.6`) produce wide-open arms that unwind quickly. |
+| `--arm_sigma` | `5.5` | Gaussian half-width of each arm (in the same units as `r_disk`). Controls how broadly nodes cluster around the arm centreline. Small values (e.g. `2`) create narrow, sharply defined arms; large values (e.g. `10`) make wide, diffuse arms that blend into the inter-arm space. |
+| `--arm_base` | `0.15` | Baseline node-placement probability anywhere in the disk, even far from all arms. Acts as an inter-arm density floor. `0.0` would leave the space between arms completely empty; `1.0` would spread nodes uniformly and erase the spiral structure. Default `0.15` gives sparse but noticeable inter-arm scatter. |
 
 ### Radial density
 
 | Argument | Default | Description |
 |---|---|---|
-| `--r_scale` | `38.0` | Exponential scale length for the radial density falloff. Smaller values concentrate nodes near the centre. |
+| `--r_scale` | `38.0` | Exponential scale length for how quickly node density drops off with radius: `P_radial(r) = exp(−r / r_scale)`. Smaller values (e.g. `20`) pack nodes tightly near the galactic centre and leave the outer disk sparse. Larger values (e.g. `60`) spread nodes more evenly across the full disk. Should generally stay in the range `[r_core, r_disk]`. |
 
 ### Sampling tuning
 
 | Argument | Default | Description |
 |---|---|---|
-| `--boost` | `6.0` | Acceptance-probability multiplier for the rejection sampler. Increase if sampling is very slow or fails to reach `n_nodes`. |
+| `--boost` | `6.0` | Internal acceptance-probability multiplier used by the rejection sampler. The raw probability `P_radial × P_arm` can be very small in parts of the parameter space, so `boost` scales it up into a practical acceptance-rate range. You normally do not need to touch this. Increase it (e.g. to `10–15`) only if generation prints a warning about failing to reach `n_nodes` within the iteration limit — which can happen if you set very tight `arm_sigma` or very small `arm_base`. |
 
 ### Reproducibility & output
 
 | Argument | Default | Description |
 |---|---|---|
-| `--seed` | `7` | Random seed. Use any integer for a different but reproducible galaxy. |
-| `--out_dir` | `output` | Directory to write output files (created if absent). |
-| `--no_gexf` | flag | Skip GEXF export. Useful when networkx is not installed. |
+| `--seed` | `7` | Random seed. Any integer gives a different but fully reproducible galaxy. |
+| `--out_dir` | `output` | Directory to write output files into (created if absent). |
+| `--no_gexf` | flag | Skip GEXF export. Use this when `networkx` is not installed, or to speed up generation when you only need the CSV files. |
 
 ### Full example
 
@@ -97,38 +100,41 @@ python run_generate.py \
 
 | Argument | Default | Description |
 |---|---|---|
-| `--out_dir` | `output` | Directory containing `nodes.csv` and `edges.csv`. |
-| `--save` | _(none)_ | Save the figure to a file (`galaxy.png`, `galaxy.pdf`, etc.) instead of opening an interactive window. |
+| `--out_dir` | `output` | Directory containing `nodes.csv` and `edges.csv`. Must match `--out_dir` used during generation. |
+| `--save` | _(none)_ | Save the figure to a file instead of opening an interactive window. The format is inferred from the extension: `galaxy.png`, `galaxy.pdf`, etc. |
+| `--svg` | _(none)_ | Save as SVG (scalable vector format). Pass a filename (`--svg galaxy.svg`) or omit the filename to default to `galaxy.svg`. SVG scales losslessly to any size and is suitable for import into Inkscape, Illustrator, or web pages. Takes precedence over `--save` when both are given. |
 
 ### Node appearance
 
 | Argument | Default | Description |
 |---|---|---|
-| `--color_by` | `arm_dist` | Node colouring scheme. `arm_dist` = gradient by distance to nearest spiral arm centreline; `r` = gradient by galactic radius; `none` = uniform flat colour. |
-| `--node_size` | `1.5` | Scatter marker size (matplotlib `s` units). |
-| `--node_color` | `#aaccff` | Flat colour used when `--color_by none`. |
-| `--gradient_low_color` | `#ffe8c0` | Gradient colour at **low** data values. For `arm_dist` this applies to nodes closest to arm centrelines; for `r` it applies to the innermost nodes. Default (warm bright) makes arm stars visually prominent. |
-| `--gradient_high_color` | `#0d000f` | Gradient colour at **high** data values. For `arm_dist` this applies to inter-arm nodes; for `r` it applies to outer-disk nodes. Default (near-black) lets distant nodes recede into the background. |
+| `--color_by` | `arm_dist` | What data drives the node colour gradient. `arm_dist` colours each node by its approximate distance to the nearest spiral arm centreline — arm stars are bright, inter-arm stars are dark. `r` colours by galactic radius — inner stars are one colour, outer stars the other. `none` applies a single flat colour to all nodes (see `--node_color`). |
+| `--node_size` | `1.5` | Scatter marker size in matplotlib `s` units. Increase for larger, more visible dots; decrease for finer detail at high node counts. |
+| `--node_color` | `#aaccff` | Flat colour used for every node when `--color_by none`. Ignored otherwise. |
+| `--gradient_low_color` | `#ffe8c0` | Colour at the **low** end of the gradient. For `arm_dist` this is the colour of nodes **closest** to an arm; for `r` it is the **innermost** nodes. Default warm-white makes spiral arms visually prominent. |
+| `--gradient_high_color` | `#0d000f` | Colour at the **high** end of the gradient. For `arm_dist` this is the colour of nodes **farthest** from any arm; for `r` it is the **outermost** nodes. Default near-black lets distant nodes fade into the background. |
 
-> **Gradient direction note:** the defaults are intentionally inverted from
-> the classic `plasma` colourmap — arm stars (low `arm_dist`) are rendered
-> bright and visible, while inter-arm stars fade to near-black.  To restore
-> the old look, swap the two values:
+> **Gradient direction note:** the defaults intentionally put bright at low values
+> (arm stars) and dark at high values (inter-arm stars), which is the opposite of
+> a standard heatmap.  To reverse this, swap the two colours:
 > `--gradient_low_color "#0d000f" --gradient_high_color "#ffe8c0"`
 
 ### Edge appearance
 
 | Argument | Default | Description |
 |---|---|---|
-| `--no_edges` | flag | Skip drawing edges entirely. Much faster for large graphs (N > 1 000). |
-| `--edge_color` | `#2244aa` | Edge line colour (any matplotlib colour string or hex). |
-| `--edge_width` | `0.4` | Edge line width in points. |
-| `--edge_alpha` | `0.35` | Edge opacity (`0` = invisible, `1` = fully opaque). |
+| `--no_edges` | flag | Skip drawing edges entirely. Strongly recommended for N > 1 000 — drawing tens of thousands of line segments is slow. Use to inspect node distribution without waiting for edge rendering. |
+| `--edge_color` | `#2244aa` | Colour of all edge lines (any matplotlib colour string or hex code). |
+| `--edge_width` | `0.4` | Edge line width in points. Increase for bolder lanes; decrease to reduce clutter at high edge counts. |
+| `--edge_alpha` | `0.35` | Edge opacity (`0` = fully invisible, `1` = fully opaque). Lower values let the node layer show through a dense edge network. |
 
 ### Spatial parameters (must match generation)
 
-These control the overlay graphics (disk circle, core circle, arm
-centrelines) and must be set to the same values used in `run_generate.py`.
+These control the reference overlay graphics drawn on top of the nodes —
+the disk boundary circle, the forbidden core circle, and the spiral arm
+centrelines. They do **not** affect node or edge data; they only change
+what the overlay looks like. Set them to the same values used in
+`run_generate.py` so the overlays align with the actual node distribution.
 
 | Argument | Default |
 |---|---|
@@ -150,7 +156,7 @@ python plot_debug.py \
     --edge_color "#3366cc" \
     --edge_width 0.5 \
     --edge_alpha 0.4 \
-    --save my_run/galaxy.png
+    --svg my_run/galaxy.svg
 ```
 
 ---
