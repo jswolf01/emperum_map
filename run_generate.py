@@ -31,6 +31,8 @@ Then visualise the result::
 """
 
 import argparse
+import json
+import os
 import sys
 
 from galaxygen import GalaxyConfig, GalaxyGenerator
@@ -172,6 +174,13 @@ def main() -> None:
 
     gen = GalaxyGenerator(cfg)
     nodes_df, edges_df = gen.run()
+
+    # Persist generation parameters so plot_debug.py can read them automatically
+    params_path = os.path.join(cfg.out_dir, "params.json")
+    params = {field: getattr(cfg, field) for field in cfg.__dataclass_fields__}
+    with open(params_path, "w") as f:
+        json.dump(params, f, indent=2)
+    print(f"Wrote {params_path}")
 
     # Remind user of next steps
     print(
