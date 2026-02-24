@@ -8,7 +8,35 @@ in Gephi or any graph tool.
 
 ---
 
-## Quick start
+## GUI (recommended)
+
+```bash
+python galaxy_gui.py
+```
+
+This opens a desktop window with all parameters visible in a scrollable
+left panel.  The workflow inside the GUI is:
+
+1. **Adjust parameters** — every setting has a slider + number input or a
+   colour picker; sections can be collapsed to reduce clutter.
+2. **Generate** — builds the galaxy and writes `nodes.csv`, `edges.csv`,
+   and `params.json` to the chosen output directory.
+3. **Preview** — renders the galaxy in the embedded canvas.  You can
+   re-render with different visual settings (colours, edge opacity, etc.)
+   without re-generating.
+4. **Export PNG… / Export SVG…** — saves a fresh render via a file-save
+   dialog.
+
+The GUI requires tkinter, which is bundled with the standard Python
+installer.  On Ubuntu/Debian it can be installed with:
+
+```bash
+sudo apt-get install python3-tk
+```
+
+---
+
+## Command-line quick start
 
 ```bash
 # Generate with all defaults (5 000 nodes, 4 spiral arms)
