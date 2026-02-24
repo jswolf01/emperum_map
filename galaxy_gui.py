@@ -270,9 +270,13 @@ class GalaxyGUI:
     # ── UI construction ───────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
+        # Action bar is packed first so it always reserves space at the bottom.
+        # The paned window is packed second with expand=True to fill what remains.
+        self._build_action_bar()
+
         # Top-level paned layout: left (params) | right (preview)
         paned = ttk.PanedWindow(self.root, orient="horizontal")
-        paned.pack(fill="both", expand=True, padx=6, pady=6)
+        paned.pack(fill="both", expand=True, padx=6, pady=(6, 0))
 
         left_outer = ttk.Frame(paned, width=390)
         left_outer.pack_propagate(False)
@@ -283,7 +287,6 @@ class GalaxyGUI:
 
         self._build_param_panel(left_outer)
         self._build_preview_panel(right_frame)
-        self._build_action_bar()
 
     # ── Parameter panel ───────────────────────────────────────────────────
 
@@ -475,7 +478,7 @@ class GalaxyGUI:
 
     def _build_action_bar(self) -> None:
         bar = ttk.Frame(self.root)
-        bar.pack(fill="x", padx=6, pady=(0, 6))
+        bar.pack(side="bottom", fill="x", padx=6, pady=(0, 6))
 
         self.btn_generate = ttk.Button(
             bar, text="Generate", command=self._on_generate, width=12)
@@ -669,8 +672,52 @@ class GalaxyGUI:
         toolbar_frame.pack(fill="x")
         NavigationToolbar2Tk(canvas, toolbar_frame).update()
 
+        self._attach_scroll_zoom(canvas)
+
         self._canvas_widget  = canvas
         self._toolbar_frame  = toolbar_frame
+
+    # ── Scroll-wheel zoom ─────────────────────────────────────────────────
+
+    def _attach_scroll_zoom(self, canvas: FigureCanvasTkAgg) -> None:
+        """Bind mouse-wheel events to zoom the first axes of *canvas*.
+
+        Zooming is centred on the cursor position when it is inside the axes;
+        otherwise it zooms around the axes centre.  Works alongside the
+        NavigationToolbar (zoom-box / pan) without conflict.
+        """
+        FACTOR = 1.2  # zoom-in multiplier per scroll notch
+
+        def _do_zoom(factor: float, ex: int, ey: int) -> None:
+            if not canvas.figure.axes:
+                return
+            ax = canvas.figure.axes[0]
+            # Convert tkinter pixel coords (origin = top-left of widget) to
+            # matplotlib display coords (origin = bottom-left of figure).
+            h = canvas.figure.bbox.height
+            xd, yd = float(ex), h - float(ey)
+            if ax.bbox.contains(xd, yd):
+                inv = ax.transData.inverted()
+                cx, cy = inv.transform((xd, yd))
+            else:
+                cx = sum(ax.get_xlim()) / 2.0
+                cy = sum(ax.get_ylim()) / 2.0
+            xl = ax.get_xlim()
+            yl = ax.get_ylim()
+            ax.set_xlim([cx - (cx - xl[0]) / factor,
+                         cx + (xl[1] - cx) / factor])
+            ax.set_ylim([cy - (cy - yl[0]) / factor,
+                         cy + (yl[1] - cy) / factor])
+            canvas.draw_idle()
+
+        w = canvas.get_tk_widget()
+        # Windows / macOS: event.delta is ±120 per notch
+        w.bind("<MouseWheel>",
+               lambda e: _do_zoom(FACTOR if e.delta > 0 else 1 / FACTOR,
+                                   e.x, e.y))
+        # Linux: Button-4 = scroll up, Button-5 = scroll down
+        w.bind("<Button-4>", lambda e: _do_zoom(FACTOR,     e.x, e.y))
+        w.bind("<Button-5>", lambda e: _do_zoom(1 / FACTOR, e.x, e.y))
 
     # ── Export actions ────────────────────────────────────────────────────
 
