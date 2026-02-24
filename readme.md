@@ -128,21 +128,21 @@ python run_generate.py \
 | `--edge_width` | `0.4` | Edge line width in points. Increase for bolder lanes; decrease to reduce clutter at high edge counts. |
 | `--edge_alpha` | `0.35` | Edge opacity (`0` = fully invisible, `1` = fully opaque). Lower values let the node layer show through a dense edge network. |
 
-### Spatial parameters (must match generation)
+### Spatial parameters (auto-loaded from `params.json`)
 
-These control the reference overlay graphics drawn on top of the nodes —
-the disk boundary circle, the forbidden core circle, and the spiral arm
-centrelines. They do **not** affect node or edge data; they only change
-what the overlay looks like. Set them to the same values used in
-`run_generate.py` so the overlays align with the actual node distribution.
+`run_generate.py` writes a `params.json` file to `--out_dir` alongside the
+CSVs. `plot_debug.py` reads it automatically, so the overlay graphics (disk
+circle, core circle, arm centrelines) always match the actual generation run
+without any manual re-entry. You only need to pass these arguments explicitly
+if you want to **override** what is in the saved file.
 
-| Argument | Default |
+| Argument | Source |
 |---|---|
-| `--r_disk` | `100.0` |
-| `--r_core` | `15.0` |
-| `--n_arms` | `4` |
-| `--arm_b` | `0.35` |
-| `--r_arm_start` | `3.0` |
+| `--r_disk` | auto from `params.json` (fallback `100.0`) |
+| `--r_core` | auto from `params.json` (fallback `15.0`) |
+| `--n_arms` | auto from `params.json` (fallback `4`) |
+| `--arm_b` | auto from `params.json` (fallback `0.35`) |
+| `--r_arm_start` | auto from `params.json` (fallback `3.0`) |
 
 ### Full example
 

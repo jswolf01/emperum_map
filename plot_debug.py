@@ -51,6 +51,7 @@ non-default values in run_generate.py, pass the same values here.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 
 import matplotlib.pyplot as plt
@@ -113,12 +114,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--edge_width", type=float, default=0.4,
                    help="Edge line width in points.")
 
-    # Spatial parameters – must match the generation run
-    p.add_argument("--r_disk",      type=float, default=100.0)
-    p.add_argument("--r_core",      type=float, default=15.0)
-    p.add_argument("--n_arms",      type=int,   default=4)
-    p.add_argument("--arm_b",       type=float, default=0.35)
-    p.add_argument("--r_arm_start", type=float, default=3.0)
+    # Spatial parameters – auto-loaded from params.json when present;
+    # explicit CLI values always take precedence.
+    p.add_argument("--r_disk",      type=float, default=None)
+    p.add_argument("--r_core",      type=float, default=None)
+    p.add_argument("--n_arms",      type=int,   default=None)
+    p.add_argument("--arm_b",       type=float, default=None)
+    p.add_argument("--r_arm_start", type=float, default=None)
 
     return p
 
@@ -138,6 +140,25 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
     -------
     matplotlib Figure
     """
+    # ── Load saved generation parameters ─────────────────────────────────
+    # params.json is written by run_generate.py alongside the CSVs.
+    # Values from it are used as defaults; explicit CLI args override them.
+    _SPATIAL_DEFAULTS = {
+        "r_disk": 100.0, "r_core": 15.0, "n_arms": 4,
+        "arm_b": 0.35, "r_arm_start": 3.0,
+    }
+    params_path = os.path.join(args.out_dir, "params.json")
+    if os.path.exists(params_path):
+        with open(params_path) as _f:
+            _saved = json.load(_f)
+        for _key, _fallback in _SPATIAL_DEFAULTS.items():
+            if getattr(args, _key) is None:
+                setattr(args, _key, _saved.get(_key, _fallback))
+    else:
+        for _key, _fallback in _SPATIAL_DEFAULTS.items():
+            if getattr(args, _key) is None:
+                setattr(args, _key, _fallback)
+
     nodes_path = os.path.join(args.out_dir, "nodes.csv")
     edges_path = os.path.join(args.out_dir, "edges.csv")
 
