@@ -33,6 +33,12 @@ Usage
     # Save to PNG instead of opening an interactive window
     python plot_debug.py --no_edges --save galaxy.png
 
+    # Save as SVG (vector, scales to any size)
+    python plot_debug.py --no_edges --svg galaxy.svg
+
+    # --svg with no filename defaults to galaxy.svg
+    python plot_debug.py --no_edges --svg
+
     # Point at a different output directory
     python plot_debug.py --out_dir my_run --no_edges
 
@@ -73,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Directory containing nodes.csv and edges.csv.")
     p.add_argument("--save",     default=None, metavar="FILE",
                    help="Save figure to FILE (png/pdf/svg) instead of displaying.")
+    p.add_argument("--svg",      nargs="?", const="galaxy.svg", default=None,
+                   metavar="FILE",
+                   help="Save figure as SVG (vector format).  "
+                        "FILE defaults to 'galaxy.svg' when omitted.  "
+                        "Overrides --save when both are given.")
 
     # Cosmetic toggles
     p.add_argument("--no_edges", action="store_true",
@@ -277,7 +288,11 @@ def main() -> None:
 
     fig = draw_galaxy(args)
 
-    if args.save:
+    if args.svg:
+        fig.savefig(args.svg, format="svg", bbox_inches="tight",
+                    facecolor=fig.get_facecolor())
+        print(f"Saved figure to {args.svg}")
+    elif args.save:
         fig.savefig(args.save, dpi=150, bbox_inches="tight",
                     facecolor=fig.get_facecolor())
         print(f"Saved figure to {args.save}")
