@@ -127,6 +127,17 @@ class GalaxyConfig:
     admin_ratio_43: float = 4.0   # lvl-4 : lvl-3
     admin_ratio_54: float = 5.0   # lvl-5 : lvl-4
 
+    # ---- admin hierarchy – spatial spacing ----
+    # admin_coverage_scale: multiplier on the auto-computed coverage radius.
+    #   1.0 = each centre covers ~n_connected/n_L nodes (log-distance rule).
+    #   < 1 = denser placement, smaller regions; > 1 = sparser, larger regions.
+    admin_coverage_scale: float = 1.0
+    # admin_sep_scale: sep_radius = max(1, round(coverage_radius × sep_scale)).
+    #   Minimum hop-distance enforced between two centres of the SAME level.
+    #   1.0 = centres just touching coverage zones; 1.5 = moderate overlap buffer;
+    #   2.0+ = strong separation, fewer centres will fit.
+    admin_sep_scale: float = 1.5
+
 
 # ---------------------------------------------------------------------------
 # Geometry helpers
@@ -670,6 +681,137 @@ class GalaxyGenerator:
 
         return n5, n4, n3, n2, n1
 
+    # ------------------------------------------------------------------
+    # Admin placement helpers
+    # ------------------------------------------------------------------
+
+    def _build_adj_list(self, n: int, edges: pd.DataFrame) -> list[list[int]]:
+        """Build an undirected adjacency list from *edges*."""
+        adj: list[list[int]] = [[] for _ in range(n)]
+        if len(edges) > 0:
+            src = edges["source"].values.astype(int)
+            tgt = edges["target"].values.astype(int)
+            for s, t in zip(src, tgt):
+                adj[s].append(t)
+                adj[t].append(s)
+        return adj
+
+    def _estimate_graph_spread(
+        self,
+        adj: list[list[int]],
+        connected_idx: np.ndarray,
+    ) -> Tuple[float, float]:
+        """Estimate graph diameter and average degree via BFS sampling.
+
+        Returns
+        -------
+        diameter_estimate : approximate longest BFS distance found
+        avg_degree        : mean degree of connected nodes
+        """
+        n_conn = len(connected_idx)
+        if n_conn == 0:
+            return 1.0, 1.0
+
+        avg_deg = sum(len(adj[i]) for i in connected_idx) / n_conn
+
+        # BFS from up to 7 random connected nodes; take the maximum eccentricity.
+        sample_size = min(7, n_conn)
+        samples = self._rng.choice(connected_idx, size=sample_size, replace=False)
+
+        max_dist = 1
+        for start in samples:
+            visited: dict[int, int] = {int(start): 0}
+            q: deque[int] = deque([int(start)])
+            while q:
+                node = q.popleft()
+                d    = visited[node]
+                for nb in adj[node]:
+                    if nb not in visited:
+                        visited[nb] = d + 1
+                        q.append(nb)
+            if visited:
+                max_dist = max(max_dist, max(visited.values()))
+
+        return float(max_dist), float(avg_deg)
+
+    def _bfs_neighborhood(
+        self, adj: list[list[int]], start: int, max_hops: int
+    ) -> dict[int, int]:
+        """BFS from *start* up to *max_hops* hops. Returns {node: distance}."""
+        visited: dict[int, int] = {start: 0}
+        q: deque[int] = deque([start])
+        while q:
+            node = q.popleft()
+            d    = visited[node]
+            if d >= max_hops:
+                continue
+            for nb in adj[node]:
+                if nb not in visited:
+                    visited[nb] = d + 1
+                    q.append(nb)
+        return visited
+
+    def _greedy_spaced_placement(
+        self,
+        adj: list[list[int]],
+        scores: np.ndarray,
+        count: int,
+        sep_radius: int,
+        excluded: set[int],
+    ) -> list[int]:
+        """Greedy placement of *count* centres with ≥ sep_radius hop separation.
+
+        Algorithm
+        ---------
+        Candidates (connected, not yet assigned to any level) are visited in
+        descending score order.  A candidate is placed only if it is at least
+        *sep_radius* hops from every already-placed centre of this level.
+        After placement, all nodes within (sep_radius − 1) hops are added to
+        the *too_close* exclusion set so subsequent candidates skip them.
+
+        The BFS for each placed centre only explores the local neighbourhood
+        up to sep_radius hops, so the per-level cost is O(count × D^sep_radius)
+        where D is the average degree — very fast even for N = 20 000.
+
+        Falls back to progressively relaxed sep_radius if the target count
+        cannot be reached with the original constraint.
+        """
+        if count <= 0:
+            return []
+
+        placed: list[int] = []
+
+        for current_sep in range(sep_radius, 0, -1):
+            placed = []
+            too_close: set[int] = set(excluded)
+
+            # Sort by score desc once; iterate linearly.
+            candidates = sorted(
+                [i for i in range(len(scores))
+                 if scores[i] > 0 and i not in excluded],
+                key=lambda i: -scores[i],
+            )
+
+            for c in candidates:
+                if len(placed) >= count:
+                    break
+                if c in too_close:
+                    continue
+
+                placed.append(c)
+
+                # Exclude all nodes within (current_sep - 1) hops.
+                if current_sep > 1:
+                    nearby = self._bfs_neighborhood(adj, c, current_sep - 1)
+                    too_close.update(nearby.keys())
+                else:
+                    too_close.add(c)
+
+            if len(placed) >= count:
+                break
+
+        return placed
+
     def _assign_admin_levels(
         self,
         nodes: pd.DataFrame,
@@ -677,39 +819,91 @@ class GalaxyGenerator:
         pop: np.ndarray,
         degree: np.ndarray,
     ) -> np.ndarray:
-        """Assign administrative hierarchy levels 0-5 to nodes.
+        """Assign administrative hierarchy levels 0–5 with spatial separation.
 
-        Selection criteria: nodes are scored by a weighted blend of population
-        (60%) and normalised degree (40%).  The top-scoring connected nodes are
-        assigned in descending order: lvl 1 (fewest, top-tier), then lvl 2, …,
-        lvl 5 (most numerous, local centres).  All remaining nodes get lvl 0.
+        Algorithm
+        ---------
+        1.  Build a graph adjacency list and estimate the network's diameter
+            and average degree from BFS samples.
+        2.  For each level L, auto-compute a *coverage radius* — the BFS
+            radius a single centre of that level should ideally service — as::
+
+                r_cover = log(n_connected / n_L) / log(avg_degree) × coverage_scale
+
+            This captures the intuition that if you have n_L centres spread
+            across n_connected nodes, each centre "owns" n_connected / n_L
+            nodes, and the BFS radius of a ball that size is log(n/n_L)/log(D).
+
+        3.  The *separation radius* (minimum hops between two same-level
+            centres) is sep_radius = max(1, round(r_cover × sep_scale)).
+
+        4.  Greedy placement with the sep_radius constraint, processing
+            from the most-important level (1) to the least (5).  Each node
+            is assigned at most one level; higher levels are excluded from
+            subsequent levels' candidate pools.
+
+        Fallback: if the required count cannot be placed under the initial
+        sep_radius, the algorithm halves the radius and retries, so it
+        always produces *some* result.
         """
-        n = len(nodes)
+        cfg = self.cfg
+        n   = len(nodes)
         admin_lvl = np.zeros(n, dtype=np.int64)
 
         connected_mask = degree > 0
         connected_idx  = np.where(connected_mask)[0]
         n_connected    = len(connected_idx)
-
         if n_connected == 0:
             return admin_lvl
 
+        # Build adjacency structure and graph spread estimates.
+        adj = self._build_adj_list(n, edges)
+        diameter, avg_deg = self._estimate_graph_spread(adj, connected_idx)
+        eff_deg = max(avg_deg, 1.5)   # guard against degree-0/1 graphs
+
+        # Scores: pop (60 %) + normalised degree (40 %).
         max_deg = max(int(degree.max()), 1)
         scores  = np.zeros(n, dtype=np.float64)
         scores[connected_mask] = (
-            pop[connected_mask]   * 0.6
+            pop[connected_mask] * 0.6
             + (degree[connected_mask] / max_deg) * 100.0 * 0.4
         )
 
-        # Sort connected nodes by score descending
-        sorted_idx = connected_idx[np.argsort(scores[connected_idx])[::-1]]
-
         n5, n4, n3, n2, n1 = self._resolve_admin_counts(n_connected)
-        pos = 0
-        for lvl, count in [(1, n1), (2, n2), (3, n3), (4, n4), (5, n5)]:
-            if count > 0 and pos < len(sorted_idx):
-                admin_lvl[sorted_idx[pos : pos + count]] = lvl
-            pos += count
+
+        def _sep_for(target_count: int) -> int:
+            if target_count <= 0:
+                return 1
+            nodes_per = max(n_connected / target_count, 2.0)
+            r_cover   = math.log(nodes_per) / math.log(eff_deg)
+            r_scaled  = max(1.0, r_cover * cfg.admin_coverage_scale)
+            sep       = max(1, int(round(r_scaled * cfg.admin_sep_scale)))
+            return sep
+
+        sep1 = _sep_for(n1)
+        sep2 = _sep_for(n2)
+        sep3 = _sep_for(n3)
+        sep4 = _sep_for(n4)
+        sep5 = _sep_for(n5)
+
+        print(f"  Admin sep radii (hops):  "
+              f"lvl1={sep1}  lvl2={sep2}  lvl3={sep3}  "
+              f"lvl4={sep4}  lvl5={sep5}  "
+              f"(graph diam≈{int(diameter)}, avg_deg≈{avg_deg:.1f})")
+
+        # Greedy placement: highest priority first; each assigned node is
+        # excluded from consideration for lower-priority levels.
+        assigned: set[int] = set()
+        for lvl, count, sep in [
+            (1, n1, sep1), (2, n2, sep2), (3, n3, sep3),
+            (4, n4, sep4), (5, n5, sep5),
+        ]:
+            if count <= 0:
+                continue
+            placed = self._greedy_spaced_placement(adj, scores, count, sep, assigned)
+            for node in placed:
+                admin_lvl[node] = lvl
+                assigned.add(node)
 
         return admin_lvl
 
