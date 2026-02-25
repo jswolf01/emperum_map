@@ -7,6 +7,13 @@ Generates N star systems (nodes) arranged in a 2-D face-on galactic disk with
 spiral-arm density waves and an empty forbidden core, then connects them with
 L-way hyperspace edges subject to hard geometric constraints.
 
+After spatial generation, worldbuilding attributes are assigned to every node:
+  • uid        – unique 7-digit system registry number (zero-padded string)
+  • name       – free-text name (blank by default)
+  • pop        – population index 0-100 (0 = uninhabited / isolated)
+  • admin_lvl  – administrative hierarchy level 0-5 (0 = none)
+  • admin_dist – minimum hop-count to the nearest admin node (−1 if none exist)
+
 Constraints enforced
 --------------------
 1. Forbidden core:  no node inside r < R_CORE; no edge whose segment
@@ -34,10 +41,12 @@ import dataclasses
 import math
 import os
 import time
-from typing import Tuple
+from collections import deque
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from scipy.sparse import csr_matrix
 from scipy.spatial import cKDTree
 
 
@@ -94,6 +103,29 @@ class GalaxyConfig:
     # ---- output ----
     out_dir: str = "output"
     write_gexf: bool = True      # attempt GEXF export (requires networkx)
+
+    # ---- population parameters ----
+    # pop_core_dispersal: 0 = no radial gradient (uniform distribution across
+    #   disk); 1 = moderate core-concentration (inner systems tend higher pop);
+    #   values > 1 = stronger core bias.
+    pop_core_dispersal: float = 1.0
+    # pop_dispersal: spatial clustering strength.  0 = independent assignment;
+    #   1 = moderate neighbour-averaging; values > 1 = stronger clustering.
+    pop_dispersal: float = 1.0
+
+    # ---- admin hierarchy – exact counts (−1 = compute from ratios) ----
+    admin_count_1: int = -1   # number of lvl-1 (top) administrative centres
+    admin_count_2: int = -1
+    admin_count_3: int = -1
+    admin_count_4: int = -1
+    admin_count_5: int = -1   # number of lvl-5 (smallest regional) centres
+
+    # ---- admin hierarchy – ratios between successive levels ----
+    # admin_ratio_XY = (# lvl-X nodes) / (# lvl-Y nodes)  where X > Y
+    admin_ratio_21: float = 2.0   # lvl-2 : lvl-1
+    admin_ratio_32: float = 3.0   # lvl-3 : lvl-2
+    admin_ratio_43: float = 4.0   # lvl-4 : lvl-3
+    admin_ratio_54: float = 5.0   # lvl-5 : lvl-4
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +271,70 @@ def arm_centerline_points(
         arms_xy.append(np.column_stack([x, y]))
 
     return arms_xy
+
+
+# ---------------------------------------------------------------------------
+# Standalone attribute helpers (callable from GUI without full regeneration)
+# ---------------------------------------------------------------------------
+
+def compute_degree(n_nodes: int, edges: pd.DataFrame) -> np.ndarray:
+    """Return per-node degree array of length *n_nodes*."""
+    degree = np.zeros(n_nodes, dtype=np.int64)
+    if len(edges) > 0:
+        src = edges["source"].values.astype(np.int64)
+        tgt = edges["target"].values.astype(np.int64)
+        np.add.at(degree, src, 1)
+        np.add.at(degree, tgt, 1)
+    return degree
+
+
+def compute_admin_dist(nodes: pd.DataFrame, edges: pd.DataFrame) -> np.ndarray:
+    """Compute minimum hop-distance to nearest admin node for every node.
+
+    Uses multi-source BFS starting from all nodes where admin_lvl > 0.
+    Nodes unreachable from any admin node receive distance −1.
+
+    Parameters
+    ----------
+    nodes : DataFrame  – must contain 'admin_lvl' column
+    edges : DataFrame  – must contain 'source' and 'target' columns
+
+    Returns
+    -------
+    dist : int64 array of length len(nodes)
+    """
+    n = len(nodes)
+    admin_mask = nodes["admin_lvl"].values > 0
+    admin_indices = np.where(admin_mask)[0]
+
+    dist = np.full(n, -1, dtype=np.int64)
+
+    if len(admin_indices) == 0:
+        return dist
+
+    # Build adjacency list
+    adj: list[list[int]] = [[] for _ in range(n)]
+    if len(edges) > 0:
+        src = edges["source"].values.astype(int)
+        tgt = edges["target"].values.astype(int)
+        for s, t in zip(src, tgt):
+            adj[s].append(t)
+            adj[t].append(s)
+
+    # Multi-source BFS
+    queue: deque[int] = deque()
+    for idx in admin_indices:
+        dist[idx] = 0
+        queue.append(int(idx))
+
+    while queue:
+        node = queue.popleft()
+        for neighbor in adj[node]:
+            if dist[neighbor] == -1:
+                dist[neighbor] = dist[node] + 1
+                queue.append(neighbor)
+
+    return dist
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +549,219 @@ class GalaxyGenerator:
         return df
 
     # ------------------------------------------------------------------
+    # Stage C: worldbuilding attribute assignment
+    # ------------------------------------------------------------------
+
+    def _generate_uids(self) -> np.ndarray:
+        """Generate unique 7-digit system registry IDs (as zero-padded strings).
+
+        Samples integers in [1_000_000, 9_999_999] with collision rejection.
+        For n ≤ 20_000 out of 9_000_000 possible values, the birthday-paradox
+        collision rate is < 0.02 %, so a single batch almost always suffices.
+        """
+        n = self.cfg.n_nodes
+        seen: set[int] = set()
+        result: list[str] = []
+        while len(result) < n:
+            batch = self._rng.integers(1_000_000, 10_000_000, size=n + 50)
+            for v in batch:
+                vi = int(v)
+                if vi not in seen:
+                    seen.add(vi)
+                    result.append(f"{vi:07d}")
+                    if len(result) >= n:
+                        break
+        return np.array(result[:n])
+
+    def _assign_population(
+        self,
+        nodes: pd.DataFrame,
+        edges: pd.DataFrame,
+        degree: np.ndarray,
+    ) -> np.ndarray:
+        """Assign population values 0-100 to each node.
+
+        Algorithm
+        ---------
+        1. Isolated nodes (degree = 0) receive pop = 0.
+        2. Connected nodes start with independent samples from Normal(50, 18).
+        3. A radial bonus shifts inner nodes toward higher values:
+              radial_bonus = (1 − r/r_disk) × 40 × pop_core_dispersal
+        4. Spatial clustering: blends each node's score with a weighted average
+           of its direct neighbours' scores.  Strength = min(0.6, 0.3 × pop_dispersal).
+        5. Scores are clamped to [1, 100] and rounded to integers.
+        """
+        cfg = self.cfg
+        n = len(nodes)
+        r = nodes["r"].values
+        connected = degree > 0
+
+        # Step 2: base bell-curve scores
+        raw = self._rng.normal(50.0, 18.0, n)
+
+        # Step 3: radial bonus
+        r_norm = np.clip(r / max(cfg.r_disk, 1e-9), 0.0, 1.0)
+        radial_bonus = (1.0 - r_norm) * 40.0 * cfg.pop_core_dispersal
+        raw = raw + radial_bonus
+
+        # Step 4: spatial clustering via sparse adjacency matrix-vector product
+        if cfg.pop_dispersal > 0 and len(edges) > 0:
+            src = edges["source"].values.astype(np.int64)
+            tgt = edges["target"].values.astype(np.int64)
+            # Build symmetric sparse adjacency (undirected)
+            data = np.ones(2 * len(src), dtype=np.float64)
+            row  = np.concatenate([src, tgt])
+            col  = np.concatenate([tgt, src])
+            A = csr_matrix((data, (row, col)), shape=(n, n))
+            deg_vec = np.array(A.sum(axis=1)).flatten()
+            neighbor_sum = A.dot(raw)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                neighbor_avg = np.where(deg_vec > 0, neighbor_sum / deg_vec, raw)
+            w = min(0.6, 0.3 * cfg.pop_dispersal)
+            raw = raw * (1.0 - w) + neighbor_avg * w
+
+        # Step 5: finalise
+        pop = np.round(np.clip(raw, 1.0, 100.0)).astype(np.int64)
+        pop[~connected] = 0   # isolated nodes are uninhabited
+
+        return pop
+
+    def _resolve_admin_counts(self, n_connected: int) -> Tuple[int, int, int, int, int]:
+        """Return (n5, n4, n3, n2, n1) admin node counts for each level.
+
+        Exact counts from GalaxyConfig take precedence over ratio-based
+        calculation.  The total is capped at n_connected.
+        """
+        cfg = self.cfg
+
+        # If all explicit counts are non-negative, use them directly
+        explicit = [cfg.admin_count_1, cfg.admin_count_2, cfg.admin_count_3,
+                    cfg.admin_count_4, cfg.admin_count_5]
+        if all(c >= 0 for c in explicit):
+            n1, n2, n3, n4, n5 = explicit
+        else:
+            # Ratio-based calculation targeting ~5% of connected nodes
+            target_total = max(1, int(n_connected * 0.05))
+            r21, r32, r43, r54 = (cfg.admin_ratio_21, cfg.admin_ratio_32,
+                                   cfg.admin_ratio_43, cfg.admin_ratio_54)
+            multiplier = 1.0 + r21 + r21*r32 + r21*r32*r43 + r21*r32*r43*r54
+            n1 = max(1, int(round(target_total / multiplier)))
+            n2 = max(1, int(round(n1 * r21)))
+            n3 = max(1, int(round(n2 * r32)))
+            n4 = max(1, int(round(n3 * r43)))
+            n5 = max(1, int(round(n4 * r54)))
+
+            # Apply any individual overrides
+            if cfg.admin_count_1 >= 0: n1 = cfg.admin_count_1
+            if cfg.admin_count_2 >= 0: n2 = cfg.admin_count_2
+            if cfg.admin_count_3 >= 0: n3 = cfg.admin_count_3
+            if cfg.admin_count_4 >= 0: n4 = cfg.admin_count_4
+            if cfg.admin_count_5 >= 0: n5 = cfg.admin_count_5
+
+        # Cap total at available connected nodes
+        total = n1 + n2 + n3 + n4 + n5
+        if total > n_connected:
+            scale = n_connected / max(total, 1)
+            n5 = int(n5 * scale)
+            n4 = int(n4 * scale)
+            n3 = int(n3 * scale)
+            n2 = int(n2 * scale)
+            n1 = max(0, int(n1 * scale))
+
+        return n5, n4, n3, n2, n1
+
+    def _assign_admin_levels(
+        self,
+        nodes: pd.DataFrame,
+        edges: pd.DataFrame,
+        pop: np.ndarray,
+        degree: np.ndarray,
+    ) -> np.ndarray:
+        """Assign administrative hierarchy levels 0-5 to nodes.
+
+        Selection criteria: nodes are scored by a weighted blend of population
+        (60%) and normalised degree (40%).  The top-scoring connected nodes are
+        assigned in descending order: lvl 1 (fewest, top-tier), then lvl 2, …,
+        lvl 5 (most numerous, local centres).  All remaining nodes get lvl 0.
+        """
+        n = len(nodes)
+        admin_lvl = np.zeros(n, dtype=np.int64)
+
+        connected_mask = degree > 0
+        connected_idx  = np.where(connected_mask)[0]
+        n_connected    = len(connected_idx)
+
+        if n_connected == 0:
+            return admin_lvl
+
+        max_deg = max(int(degree.max()), 1)
+        scores  = np.zeros(n, dtype=np.float64)
+        scores[connected_mask] = (
+            pop[connected_mask]   * 0.6
+            + (degree[connected_mask] / max_deg) * 100.0 * 0.4
+        )
+
+        # Sort connected nodes by score descending
+        sorted_idx = connected_idx[np.argsort(scores[connected_idx])[::-1]]
+
+        n5, n4, n3, n2, n1 = self._resolve_admin_counts(n_connected)
+        pos = 0
+        for lvl, count in [(1, n1), (2, n2), (3, n3), (4, n4), (5, n5)]:
+            if count > 0 and pos < len(sorted_idx):
+                admin_lvl[sorted_idx[pos : pos + count]] = lvl
+            pos += count
+
+        return admin_lvl
+
+    def assign_attributes(
+        self,
+        nodes: pd.DataFrame,
+        edges: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Compute and attach all worldbuilding attributes to *nodes*.
+
+        This method can be called independently of ``run()`` to re-assign
+        attributes (e.g. when the user tweaks population or admin parameters
+        in the GUI without regenerating the spatial layout).
+
+        Parameters
+        ----------
+        nodes : DataFrame  – spatial columns already present
+        edges : DataFrame  – FTL lane connections
+
+        Returns
+        -------
+        nodes : DataFrame with uid, name, pop, admin_lvl, admin_dist columns
+                added (or replaced if already present).
+        """
+        n = len(nodes)
+        degree = compute_degree(n, edges)
+
+        print("Stage C: assigning worldbuilding attributes …")
+
+        # UIDs – only generate if not already present
+        if "uid" not in nodes.columns:
+            nodes = nodes.copy()
+            nodes["uid"] = self._generate_uids()
+        if "name" not in nodes.columns:
+            nodes = nodes.copy() if "uid" in nodes.columns else nodes
+            nodes["name"] = ""
+
+        pop       = self._assign_population(nodes, edges, degree)
+        admin_lvl = self._assign_admin_levels(nodes, edges, pop, degree)
+
+        nodes = nodes.copy()
+        nodes["pop"]       = pop
+        nodes["admin_lvl"] = admin_lvl
+
+        # admin_dist requires admin_lvl column
+        nodes["admin_dist"] = compute_admin_dist(nodes, edges)
+
+        print(f"  {int((pop > 0).sum()):,} inhabited systems, "
+              f"{int((admin_lvl > 0).sum()):,} admin centres assigned.")
+        return nodes
+
+    # ------------------------------------------------------------------
     # Acceptance tests
     # ------------------------------------------------------------------
 
@@ -559,15 +868,19 @@ class GalaxyGenerator:
         G = nx.Graph()
 
         # Nodes – cast to plain Python types so networkx serialises cleanly
+        attr_cols = ["x", "y", "r", "theta", "arm_dist",
+                     "uid", "name", "pop", "admin_lvl", "admin_dist"]
         for row in nodes.itertuples(index=False):
-            G.add_node(
-                int(row.id),
-                x=float(row.x),
-                y=float(row.y),
-                r=float(row.r),
-                theta=float(row.theta),
-                arm_dist=float(row.arm_dist),
-            )
+            attrs = {col: getattr(row, col)
+                     for col in attr_cols if hasattr(row, col)}
+            # Ensure numeric types for networkx
+            for k in ["x", "y", "r", "theta", "arm_dist"]:
+                if k in attrs:
+                    attrs[k] = float(attrs[k])
+            for k in ["pop", "admin_lvl", "admin_dist"]:
+                if k in attrs:
+                    attrs[k] = int(attrs[k])
+            G.add_node(int(row.id), **attrs)
 
         # Edges
         for row in edges.itertuples(index=False):
@@ -593,10 +906,13 @@ class GalaxyGenerator:
         ------
         A – sample node positions with radial + spiral-arm preferences.
         B – build L-way edges with KD-tree acceleration and core filtering.
+        C – assign worldbuilding attributes (uid, name, pop, admin_lvl,
+            admin_dist).
 
         Returns
         -------
-        nodes_df : DataFrame  (id, x, y, r, theta, arm_dist)
+        nodes_df : DataFrame  (id, x, y, r, theta, arm_dist,
+                               uid, name, pop, admin_lvl, admin_dist)
         edges_df : DataFrame  (source, target, length, weight)
         """
         cfg = self.cfg
@@ -623,6 +939,12 @@ class GalaxyGenerator:
         t0 = time.perf_counter()
         edges = self._build_edges(xy)
         print(f"  {len(edges):,} edges built in {time.perf_counter() - t0:.2f}s")
+
+        # ── Stage C ──────────────────────────────────────────────────
+        print()
+        t0 = time.perf_counter()
+        nodes = self.assign_attributes(nodes, edges)
+        print(f"  Attributes assigned in {time.perf_counter() - t0:.2f}s")
 
         # ── Acceptance tests ─────────────────────────────────────────
         self._run_checks(nodes, edges, xy)
