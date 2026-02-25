@@ -177,7 +177,8 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
 
     # ── Figure setup ─────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 10))
-    ax.set_aspect("equal")
+    # Equal initial ranges give square aspect without set_aspect locking the box.
+    # This lets scroll-zoom and drag-pan work freely in the embedded canvas.
 
     BG = "#09090f"
     ax.set_facecolor(BG)
@@ -326,7 +327,6 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
         labelcolor="white",
     )
 
-    plt.tight_layout()
     return fig
 
 

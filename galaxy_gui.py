@@ -272,6 +272,10 @@ class GalaxyGUI:
         self.v_admin_ratio_43 = dv(value=4.0)
         self.v_admin_ratio_54 = dv(value=5.0)
 
+        # ── Admin levels – spatial spacing ───────────────────────────────
+        self.v_admin_coverage_scale = dv(value=1.0)
+        self.v_admin_sep_scale      = dv(value=1.5)
+
         # ── Node inspector (editable fields for selected node) ────────────
         self.v_insp_uid       = sv(value="")
         self.v_insp_name      = sv(value="")
@@ -510,6 +514,23 @@ class GalaxyGUI:
                             ("Lvl 5 : Lvl 4 ratio", self.v_admin_ratio_54)]:
             SliderEntry(s, label, var, 1.0, 20.0, 0.5, label_width=RLW).pack(fill="x")
 
+        ttk.Label(s, text="── Spatial spacing ──",
+                  foreground="#cccccc").pack(anchor="w", padx=4, pady=(8, 0))
+
+        SliderEntry(s, "Coverage scale", self.v_admin_coverage_scale,
+                    0.1, 5.0, 0.1, label_width=RLW).pack(fill="x")
+        ttk.Label(s, text=(
+            "  Scales the auto-computed coverage radius for each level.\n"
+            "  Lower = denser centres; higher = sparser, larger regions."
+        ), foreground="#888888", wraplength=320).pack(anchor="w", padx=6)
+
+        SliderEntry(s, "Separation scale", self.v_admin_sep_scale,
+                    0.5, 5.0, 0.1, label_width=RLW).pack(fill="x")
+        ttk.Label(s, text=(
+            "  Min-separation = coverage_radius × this.  "
+            "  Lower = centres can cluster; higher = forced wide spread."
+        ), foreground="#888888", wraplength=320).pack(anchor="w", padx=6)
+
         # ── Node Inspector ────────────────────────────────────────────
         sec = Section(inner, "Node Inspector", start_open=True)
         sec.pack(fill="x", padx=4, pady=3)
@@ -685,6 +706,9 @@ class GalaxyGUI:
             admin_ratio_32         = self.v_admin_ratio_32.get(),
             admin_ratio_43         = self.v_admin_ratio_43.get(),
             admin_ratio_54         = self.v_admin_ratio_54.get(),
+            # Admin spatial spacing
+            admin_coverage_scale   = self.v_admin_coverage_scale.get(),
+            admin_sep_scale        = self.v_admin_sep_scale.get(),
         )
 
     def _build_plot_args(self,
@@ -912,6 +936,7 @@ class GalaxyGUI:
         NavigationToolbar2Tk(canvas, toolbar_frame).update()
 
         self._attach_scroll_zoom(canvas)
+        self._attach_pan(canvas)
         self._attach_node_click(canvas)
 
         self._canvas_widget = canvas
@@ -920,14 +945,23 @@ class GalaxyGUI:
     # ── Scroll-wheel zoom ─────────────────────────────────────────────────
 
     def _attach_scroll_zoom(self, canvas: FigureCanvasTkAgg) -> None:
+        """Scroll-wheel zoom centred on the cursor position.
+
+        Both axes are scaled by the same factor so the galaxy stays
+        undistorted regardless of window shape.  The axes tick labels
+        update to reflect the new coordinate range.
+        """
         FACTOR = 1.2
 
         def _do_zoom(factor: float, ex: int, ey: int) -> None:
             if not canvas.figure.axes:
                 return
             ax = canvas.figure.axes[0]
-            h = canvas.figure.bbox.height
-            xd, yd = float(ex), h - float(ey)
+            # Convert tkinter pixel coords (top-left origin) to
+            # matplotlib display coords (bottom-left origin).
+            fig_h = canvas.figure.bbox.height
+            xd = float(ex)
+            yd = float(fig_h) - float(ey)
             if ax.bbox.contains(xd, yd):
                 inv = ax.transData.inverted()
                 cx, cy = inv.transform((xd, yd))
@@ -935,9 +969,12 @@ class GalaxyGUI:
                 cx = sum(ax.get_xlim()) / 2.0
                 cy = sum(ax.get_ylim()) / 2.0
             xl, yl = ax.get_xlim(), ax.get_ylim()
-            ax.set_xlim([cx - (cx - xl[0]) / factor, cx + (xl[1] - cx) / factor])
-            ax.set_ylim([cy - (cy - yl[0]) / factor, cy + (yl[1] - cy) / factor])
-            canvas.draw_idle()
+            # Scale both axes by identical factor (preserves aspect ratio).
+            x_half = (xl[1] - xl[0]) / 2.0 / factor
+            y_half = (yl[1] - yl[0]) / 2.0 / factor
+            ax.set_xlim([cx - x_half, cx + x_half])
+            ax.set_ylim([cy - y_half, cy + y_half])
+            canvas.draw()
 
         w = canvas.get_tk_widget()
         w.bind("<MouseWheel>",
@@ -945,27 +982,78 @@ class GalaxyGUI:
         w.bind("<Button-4>", lambda e: _do_zoom(FACTOR,     e.x, e.y))
         w.bind("<Button-5>", lambda e: _do_zoom(1 / FACTOR, e.x, e.y))
 
+    # ── Drag-to-pan ───────────────────────────────────────────────────────
+
+    def _attach_pan(self, canvas: FigureCanvasTkAgg) -> None:
+        """Right-click-drag (or middle-click-drag) pans the galaxy view.
+
+        Tracks the cumulative pixel delta since the last motion event and
+        converts it to data-space displacement using the live axis scale.
+        Left-click is reserved for node selection; the NavigationToolbar's
+        own Pan/Zoom tools also continue to work normally.
+        """
+        state: dict = {"active": False, "last": None}
+
+        def _start(e: tk.Event) -> None:
+            state["active"] = True
+            state["last"]   = (e.x, e.y)
+
+        def _move(e: tk.Event) -> None:
+            if not state["active"] or state["last"] is None:
+                return
+            if not canvas.figure.axes:
+                return
+            ax   = canvas.figure.axes[0]
+            bbox = ax.get_window_extent()
+            if bbox.width == 0 or bbox.height == 0:
+                return
+            xl, yl    = ax.get_xlim(), ax.get_ylim()
+            dx_pix    = e.x - state["last"][0]
+            dy_pix    = e.y - state["last"][1]
+            x_scale   = (xl[1] - xl[0]) / bbox.width
+            y_scale   = (yl[1] - yl[0]) / bbox.height
+            # Screen y is inverted relative to data y.
+            shift_x   = -dx_pix * x_scale
+            shift_y   =  dy_pix * y_scale
+            ax.set_xlim([xl[0] + shift_x, xl[1] + shift_x])
+            ax.set_ylim([yl[0] + shift_y, yl[1] + shift_y])
+            state["last"] = (e.x, e.y)
+            canvas.draw()
+
+        def _stop(e: tk.Event) -> None:
+            state["active"] = False
+            state["last"]   = None
+
+        w = canvas.get_tk_widget()
+        # Middle-click drag
+        w.bind("<Button-2>",        _start)
+        w.bind("<B2-Motion>",       _move)
+        w.bind("<ButtonRelease-2>", _stop)
+        # Right-click drag (more accessible on systems without middle button)
+        w.bind("<Button-3>",        _start)
+        w.bind("<B3-Motion>",       _move)
+        w.bind("<ButtonRelease-3>", _stop)
+
     # ── Node click / selection ────────────────────────────────────────────
 
     def _attach_node_click(self, canvas: FigureCanvasTkAgg) -> None:
-        """Wire up matplotlib button-press events for node selection."""
+        """Left-click selects the nearest node within a proximity threshold."""
         def _on_click(event):
+            # Only handle left-clicks; right/middle are reserved for pan.
+            if event.button != 1:
+                return
             if event.inaxes is None:
                 return
             if self._node_tree is None or self._nodes_df is None:
                 return
-            # Convert axes data coords to display coords to find a good threshold
             ax = event.inaxes
-            # Query: find the nearest node in data space
             click_xy = np.array([[event.xdata, event.ydata]])
             dist, idx = self._node_tree.query(click_xy, k=1)
-            idx = int(idx[0])
+            idx  = int(idx[0])
             dist = float(dist[0])
-
-            # Threshold: ~1% of the current axis width
-            xlim = ax.get_xlim()
+            # Threshold: ~1.5% of current axis width
+            xlim      = ax.get_xlim()
             threshold = (xlim[1] - xlim[0]) * 0.015
-
             if dist <= threshold:
                 self._selected_node = idx
                 self.root.after(0, lambda: self._on_node_selected(idx))
