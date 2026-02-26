@@ -255,36 +255,57 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
             dtype=np.float32,
         )
 
+    # ── Node visibility mask (reduced view / filter) ───────────────────────
+    # vis[i] = True means node i is rendered; False means hidden.
+    _node_mask = getattr(args, "node_mask", None)
+    if _node_mask is not None and len(_node_mask) == len(nodes):
+        vis = np.asarray(_node_mask, dtype=bool)
+    else:
+        vis = np.ones(len(nodes), dtype=bool)
+
     # ── Edges ─────────────────────────────────────────────────────────────
     if not getattr(args, "no_edges", False) and len(edges) > 0:
         xy  = nodes[["x", "y"]].values
         src = edges["source"].values.astype(int)
         tgt = edges["target"].values.astype(int)
-        segs = [[xy[s], xy[t]] for s, t in zip(src, tgt)]
 
-        if _h_vals is not None:
-            # Hierarchy mode: colour edges that share a hierarchy; dim the rest.
-            ec = [
-                (*_hmap.get(int(_h_vals[s]), _HIER_UNASSIGNED), 0.55)
-                if (_h_vals[s] >= 0 and int(_h_vals[s]) == int(_h_vals[t]))
-                else _HIER_CROSS_EDGE
-                for s, t in zip(src, tgt)
-            ]
-            lc = LineCollection(segs, colors=ec,
-                                linewidths=args.edge_width, zorder=5)
-        else:
-            lc = LineCollection(
-                segs,
-                colors=args.edge_color,
-                linewidths=args.edge_width,
-                alpha=args.edge_alpha,
-                zorder=5,
-            )
-        ax.add_collection(lc)
+        # Filter edges: hide any edge touching a hidden node.
+        edge_vis = vis[src] & vis[tgt]
+        src_v = src[edge_vis]
+        tgt_v = tgt[edge_vis]
+
+        if len(src_v) > 0:
+            segs = [[xy[s], xy[t]] for s, t in zip(src_v, tgt_v)]
+
+            if _h_vals is not None:
+                # Hierarchy mode: colour edges that share a hierarchy; dim the rest.
+                ec = [
+                    (*_hmap.get(int(_h_vals[s]), _HIER_UNASSIGNED), 0.55)
+                    if (_h_vals[s] >= 0 and int(_h_vals[s]) == int(_h_vals[t]))
+                    else _HIER_CROSS_EDGE
+                    for s, t in zip(src_v, tgt_v)
+                ]
+                lc = LineCollection(segs, colors=ec,
+                                    linewidths=args.edge_width, zorder=5)
+            else:
+                lc = LineCollection(
+                    segs,
+                    colors=args.edge_color,
+                    linewidths=args.edge_width,
+                    alpha=args.edge_alpha,
+                    zorder=5,
+                )
+            ax.add_collection(lc)
 
     # ── Nodes ─────────────────────────────────────────────────────────────
-    x = nodes["x"].values
-    y = nodes["y"].values
+    x = nodes["x"].values[vis]
+    y = nodes["y"].values[vis]
+
+    # Build user gradient colormap — applied to ALL gradient color modes so
+    # the gradient low/high controls in the GUI always take effect.
+    grad_cmap = LinearSegmentedColormap.from_list(
+        "user_gradient", [args.gradient_low_color, args.gradient_high_color]
+    )
 
     sc     = None
     clabel = None
@@ -294,42 +315,36 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
         # Hierarchy mode: categorical RGBA colours, no gradient colorbar.
         sc = ax.scatter(
             x, y,
-            c=_hier_node_rgba,
+            c=_hier_node_rgba[vis],
             s=args.node_size,
             linewidths=0,
             zorder=6,
         )
     else:
-        grad_cmap = LinearSegmentedColormap.from_list(
-            "user_gradient", [args.gradient_low_color, args.gradient_high_color]
-        )
-
-        # Colormaps for worldbuilding attributes
-        _POP_CMAP   = LinearSegmentedColormap.from_list(
-            "pop", ["#0a0a1a", "#1a3a6a", "#2266cc", "#44aaff", "#ffffff"])
-        _ADMIN_CMAP = LinearSegmentedColormap.from_list(
-            "admin", ["#111111", "#331100", "#884400", "#cc6600", "#ff9900", "#ffff44"])
-        _DIST_CMAP  = LinearSegmentedColormap.from_list(
-            "adist", ["#ffff44", "#66aa22", "#116633", "#003322", "#000a0a"])
-
         if color_by == "arm_dist" and "arm_dist" in nodes.columns:
-            c, cmap, clabel = nodes["arm_dist"].values, grad_cmap, "Arm distance"
+            c_val = nodes["arm_dist"].values[vis]
+            cmap, clabel = grad_cmap, "Arm distance"
         elif color_by == "r" and "r" in nodes.columns:
-            c, cmap, clabel = nodes["r"].values, grad_cmap, "Radius"
+            c_val = nodes["r"].values[vis]
+            cmap, clabel = grad_cmap, "Radius"
         elif color_by == "pop" and "pop" in nodes.columns:
-            c, cmap, clabel = nodes["pop"].values, _POP_CMAP, "Population"
+            c_val = nodes["pop"].values[vis]
+            cmap, clabel = grad_cmap, "Population"
         elif color_by == "admin_lvl" and "admin_lvl" in nodes.columns:
-            c, cmap, clabel = nodes["admin_lvl"].values, _ADMIN_CMAP, "Admin level"
+            c_val = nodes["admin_lvl"].values[vis]
+            cmap, clabel = grad_cmap, "Admin level"
         elif color_by == "admin_dist" and "admin_dist" in nodes.columns:
             raw = nodes["admin_dist"].values.astype(float)
             raw[raw < 0] = raw[raw >= 0].max() + 1 if (raw >= 0).any() else 0
-            c, cmap, clabel = raw, _DIST_CMAP, "Admin distance (hops)"
+            c_val = raw[vis]
+            cmap, clabel = grad_cmap, "Admin distance (hops)"
         else:
-            c, cmap, clabel = args.node_color, None, None
+            c_val = args.node_color
+            cmap = None
 
         sc = ax.scatter(
             x, y,
-            c=c, cmap=cmap,
+            c=c_val, cmap=cmap,
             s=args.node_size,
             alpha=0.75,
             linewidths=0,
@@ -345,26 +360,32 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
     # ── Search / selection highlights ─────────────────────────────────────
     found_nodes = getattr(args, "found_nodes", None)
     if found_nodes is not None and len(found_nodes) > 0:
-        fx = nodes["x"].values[found_nodes]
-        fy = nodes["y"].values[found_nodes]
-        ax.scatter(fx, fy, s=max(args.node_size * 8, 30),
-                   facecolors="none", edgecolors="#00ff88",
-                   linewidths=1.5, zorder=9, label="Search results")
+        found_vis = [fn for fn in found_nodes if fn < len(nodes) and vis[fn]]
+        if found_vis:
+            fx = nodes["x"].values[found_vis]
+            fy = nodes["y"].values[found_vis]
+            ax.scatter(fx, fy, s=max(args.node_size * 8, 30),
+                       facecolors="none", edgecolors="#00ff88",
+                       linewidths=1.5, zorder=9, label="Search results")
 
     selected_nodes = getattr(args, "selected_nodes", None)
     if selected_nodes is not None and len(selected_nodes) > 0:
-        sx = nodes["x"].values[selected_nodes]
-        sy = nodes["y"].values[selected_nodes]
-        ax.scatter(sx, sy, s=max(args.node_size * 12, 50),
-                   facecolors="none", edgecolors="#ffff00",
-                   linewidths=2.0, zorder=10, label="Selected")
+        sel_vis = [sn for sn in selected_nodes if sn < len(nodes) and vis[sn]]
+        if sel_vis:
+            sx = nodes["x"].values[sel_vis]
+            sy = nodes["y"].values[sel_vis]
+            ax.scatter(sx, sy, s=max(args.node_size * 12, 50),
+                       facecolors="none", edgecolors="#ffff00",
+                       linewidths=2.0, zorder=10, label="Selected")
 
     # ── Decorations ───────────────────────────────────────────────────────
     no_edges = getattr(args, "no_edges", False)
+    n_hidden = int((~vis).sum())
     title = (
         f"Emperum Galaxy  —  "
         f"{len(nodes):,} systems  |  {len(edges):,} L-ways"
         + ("  (edges hidden)" if no_edges else "")
+        + (f"  |  {n_hidden:,} filtered" if n_hidden > 0 else "")
     )
     ax.set_title(title, color="white", fontsize=11, pad=10)
 

@@ -8,6 +8,45 @@ Outputs `nodes.csv`, `edges.csv`, and (optionally) `graph.gexf`.
 
 ---
 
+## Plain-language overview
+
+If you are new to the project, start here.  No programming knowledge needed.
+
+**What this tool does:**
+It creates a fictional star map.  You tell it how many star systems to place and
+how they should be arranged (spiral arms, a dense center, an empty forbidden
+zone in the middle), and it generates a galaxy for you — complete with travel
+lanes between nearby stars.  You can then assign political attributes to those
+stars: population, administrative rank, and which empire or faction controls
+each system.
+
+**The three panels:**
+
+| Panel | Plain description |
+|-------|-------------------|
+| **Left** | Sliders and settings that control what the galaxy looks like — number of stars, how many spiral arms, how connected they are, etc. Split into two tabs: **Generation** (shape and structure) and **Appearance** (colors and sizes). |
+| **Centre** | The preview — a picture of the galaxy that updates when you click Preview. You can zoom in with the scroll wheel, pan by right-click-dragging, and click on a star to see its details. |
+| **Right** | Information about the stars — population levels, who is in charge of what. Split into four tabs: **Attributes** (set population/admin rules), **Inspector** (see/edit a selected star), **Search** (find stars by property), **Filter** (show or hide specific groups of stars). |
+
+**Typical first run:**
+
+1. Open the app: `python galaxy_gui.py`
+2. Leave everything on default and click **Generate** (bottom bar).
+3. Click **Preview** — you will see a galaxy appear.
+4. Click **Apply Attributes** (Attributes tab, right panel) to assign populations and governments.
+5. Switch "Color by" (Appearance tab, left panel) to `hierarchy` and click **Preview** again to see political boundaries in color.
+6. Click any star — the Inspector tab will fill with its details.
+7. Use **Export PNG…** to save an image.
+
+**Common questions:**
+
+- *Why are some stars dark/unlit?*  They have no population (isolated nodes).
+- *Why are some regions all one color in hierarchy mode?*  Those stars all report to the same Level-1 capital — they are one administrative empire.
+- *What are L-ways?*  The lines between stars — hyperspace travel routes in the Emperum setting.
+- *How do I get more connections?*  Increase "Avg degree" or "Max lane length" in the Generation tab.
+
+---
+
 ## Project layout
 
 ```
@@ -51,9 +90,9 @@ A three-panel window opens:
 
 | Panel | Contents |
 |-------|----------|
-| **Left** | Generation parameters — scrollable, collapsible sections |
+| **Left** | Two tabs — Generation and Appearance |
 | **Centre** | Embedded Matplotlib preview with zoom / pan |
-| **Right** | Worldbuilding attributes, Node Inspector, Search |
+| **Right** | Four tabs — Attributes, Inspector, Search, Filter |
 
 The action bar runs along the bottom: **Generate**, **Preview**,
 **Export PNG…**, **Export SVG…**, and a status line.
@@ -62,20 +101,21 @@ The action bar runs along the bottom: **Generate**, **Preview**,
 
 ## Typical workflow
 
-1. **Tune parameters** in the left panel (collapse sections you are not using).
+1. **Tune parameters** in the Generation tab (left panel).
 2. Click **Generate** — builds the spatial graph and writes all output files.
 3. Click **Preview** — renders the galaxy in the centre panel.
-4. Use the **Right panel** to adjust population / admin settings, then click
-   **Apply Attributes** to re-run worldbuilding assignment without rebuilding
+4. Use the **Attributes tab** (right) to adjust population / admin settings,
+   then click **Apply Attributes** to re-run worldbuilding without rebuilding
    the spatial layout.
-5. Switch `Color by` to `hierarchy` (or any other mode) and click **Preview**
+5. Switch `Color by` to `hierarchy` (Appearance tab) and click **Preview**
    again — no regeneration needed, just a visual redraw.
-6. Click a node to inspect it in the **Node Inspector**.
-7. **Export PNG…** or **Export SVG…** to save the current view.
+6. Click a node to inspect it in the **Inspector tab**.
+7. Use the **Filter tab** to focus on a subset of nodes (see below).
+8. **Export PNG…** or **Export SVG…** to save the current view.
 
 ---
 
-## Left panel — generation parameters
+## Left panel — Generation tab
 
 ### Spatial
 
@@ -92,6 +132,10 @@ The action bar runs along the bottom: **Generate**, **Preview**,
 | Max lane length (l_max) | 9.0 | Hard length cap per edge |
 | Avg degree (target_degree) | 4.0 | Edge budget ≈ N × D / 2 |
 | Connection chance | 1.0 | Fraction of nodes eligible for any edges (0 = all isolated, 1 = all eligible) |
+
+> **Connectivity guarantee:** After the random edge selection, the generator
+> automatically adds the shortest possible bridge edges to ensure that all
+> connected nodes form a single network — no isolated islands.
 
 ### Spiral Arms
 
@@ -122,6 +166,10 @@ The action bar runs along the bottom: **Generate**, **Preview**,
 | Output directory | `output` | Directory for all written files |
 | Export GEXF | ✓ | Writes `graph.gexf` for Gephi (requires networkx) |
 
+---
+
+## Left panel — Appearance tab
+
 ### Node Appearance
 
 | Control | Default | Description |
@@ -129,8 +177,12 @@ The action bar runs along the bottom: **Generate**, **Preview**,
 | Color by | `arm_dist` | Data driving node color — see table below |
 | Node size | 1.5 | Scatter marker size |
 | Flat color | `#aaccff` | Used when `Color by = none` |
-| Gradient low | `#ffe8c0` | Color at the low end of the gradient |
-| Gradient high | `#0d000f` | Color at the high end of the gradient |
+| Gradient low | `#ffe8c0` | Color at the **low** end of the gradient (low data value) |
+| Gradient high | `#0d000f` | Color at the **high** end of the gradient (high data value) |
+
+The **Gradient low** and **Gradient high** colors apply to **all** gradient
+color modes — arm_dist, r, pop, admin_lvl, and admin_dist.  Whatever colors you
+pick here will be used for any of those modes.
 
 **Color by options:**
 
@@ -138,9 +190,9 @@ The action bar runs along the bottom: **Generate**, **Preview**,
 |-------|-------------|
 | `arm_dist` | Distance to nearest spiral arm — arm nodes bright, inter-arm dark |
 | `r` | Galactic radius — inner bright, outer dark |
-| `pop` | Population index — dark (0) through blue/cyan to white (100) |
-| `admin_lvl` | Admin level — dark (none) through brown/orange to yellow (5) |
-| `admin_dist` | Hop-count to nearest admin node — yellow (0) fading to dark |
+| `pop` | Population index — low → gradient low color, 100 → gradient high color |
+| `admin_lvl` | Admin level — low → gradient low color, level 5 → gradient high color |
+| `admin_dist` | Hop-count to nearest admin node — 0 → gradient low color, far → gradient high color |
 | `hierarchy` | **Administrative domain** — each discrete hierarchy gets its own color; all nodes and edges in a domain share that color |
 | `none` | Flat single color |
 
@@ -160,7 +212,7 @@ The action bar runs along the bottom: **Generate**, **Preview**,
 
 ---
 
-## Right panel — worldbuilding attributes
+## Right panel — Attributes tab
 
 ### Apply Attributes
 
@@ -208,7 +260,9 @@ Five administrative levels are placed hierarchically.  Level 1 is the highest
 | Coverage scale | 1.0 | Scales the auto-computed coverage radius per level |
 | Separation scale | 1.5 | Minimum separation = coverage_radius × this value |
 
-### Node Inspector
+---
+
+## Right panel — Inspector tab
 
 Click any node on the preview to populate the inspector.
 
@@ -228,10 +282,12 @@ Buttons:
   values (useful after manual admin edits).
 - **Deselect** — clears the selection.
 
-> After manually changing `admin_lvl` values, use **Apply Attributes** (top of
-> right panel) to recompute hierarchy assignments across all nodes.
+> After manually changing `admin_lvl` values, use **Apply Attributes** (Attributes
+> tab) to recompute hierarchy assignments across all nodes.
 
-### Search
+---
+
+## Right panel — Search tab
 
 Search any column in the node table using a chosen attribute, operator, and
 value.  Matching nodes are highlighted as green rings on the preview.
@@ -241,6 +297,27 @@ value.  Matching nodes are highlighted as green rings on the preview.
 | Operator options | `contains`, `=`, `>`, `<`, `>=`, `<=` |
 
 The first matched node is auto-selected in the inspector.
+
+---
+
+## Right panel — Filter tab (reduced view)
+
+The filter lets you show or hide a subset of nodes — and automatically hides
+their connected edges too.  Useful for decluttering the view when you only want
+to see, for example, highly populated systems or a specific administrative tier.
+
+**How to use:**
+
+1. Check **Enable reduced view filter**.
+2. Enable one or more condition rows (check the checkbox at the left of each row).
+3. For each enabled row, pick an attribute (e.g. `pop`), an operator (e.g. `>`), and a value (e.g. `50`).
+4. Choose whether multiple conditions combine with **AND** (all must match) or **OR** (any must match).
+5. Choose the mode:
+   - **Show only matching** — only matching nodes are drawn; everything else vanishes.
+   - **Hide matching** — matching nodes are hidden; everything else remains.
+6. Click **Apply Filter** (or just click **Preview**) to redraw.
+
+> The filter title in the preview shows how many nodes are currently hidden.
 
 ---
 
@@ -276,8 +353,8 @@ nodes whose chain terminates at the same lvl-1 root share the same integer
 roots).  Unpopulated nodes and nodes disconnected from every admin-level-1
 root receive `hierarchy = -1`.
 
-To visualize: select `hierarchy` from the **Color by** dropdown and click
-**Preview**.
+To visualize: select `hierarchy` from the **Color by** dropdown (Appearance
+tab) and click **Preview**.
 
 ---
 
