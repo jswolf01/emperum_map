@@ -282,6 +282,7 @@ class GalaxyGUI:
         self.v_insp_pop       = iv(value=0)
         self.v_insp_admin_lvl = iv(value=0)
         self.v_insp_admin_dist= sv(value="")
+        self.v_insp_hierarchy = sv(value="")
 
         # ── Search ───────────────────────────────────────────────────────
         self.v_search_attr    = sv(value="name")
@@ -409,7 +410,8 @@ class GalaxyGUI:
         ttk.Label(row, text="Colour by", width=LW, anchor="w").pack(side="left", padx=(4, 2))
         ttk.Combobox(
             row, textvariable=self.v_color_by,
-            values=["arm_dist", "r", "pop", "admin_lvl", "admin_dist", "none"],
+            values=["arm_dist", "r", "pop", "admin_lvl", "admin_dist",
+                    "hierarchy", "none"],
             state="readonly", width=11,
         ).pack(side="left")
         SliderEntry(s, "Node size", self.v_node_size, 0.1, 20.0, 0.1, label_width=LW).pack(fill="x")
@@ -556,6 +558,9 @@ class GalaxyGUI:
         _insp_row(s, "Admin dist (hops)",
                   lambda p: ttk.Entry(p, textvariable=self.v_insp_admin_dist,
                                       state="readonly", width=8))
+        _insp_row(s, "Hierarchy index",
+                  lambda p: ttk.Entry(p, textvariable=self.v_insp_hierarchy,
+                                      state="readonly", width=8))
 
         # Editable fields
         _insp_row(s, "Name",
@@ -587,7 +592,8 @@ class GalaxyGUI:
             side="left", padx=(4, 2))
         ttk.Combobox(
             row, textvariable=self.v_search_attr,
-            values=["name", "uid", "pop", "admin_lvl", "admin_dist", "id"],
+            values=["name", "uid", "pop", "admin_lvl", "admin_dist",
+                    "hierarchy", "id"],
             state="readonly", width=12,
         ).pack(side="left")
 
@@ -851,7 +857,8 @@ class GalaxyGUI:
                 edges = self._edges_df if self._edges_df is not None else pd.DataFrame()
 
                 # Drop old attribute columns so assign_attributes regenerates them
-                for col in ["uid", "name", "pop", "admin_lvl", "admin_dist"]:
+                for col in ["uid", "name", "pop", "admin_lvl", "admin_dist",
+                            "hierarchy"]:
                     if col in nodes.columns:
                         nodes = nodes.drop(columns=[col])
 
@@ -1085,6 +1092,11 @@ class GalaxyGUI:
         except (ValueError, TypeError):
             adist = -1
         self.v_insp_admin_dist.set(str(adist) if adist >= 0 else "N/A")
+        try:
+            hier = int(row.get("hierarchy", -1)) if "hierarchy" in self._nodes_df.columns else -1
+        except (ValueError, TypeError):
+            hier = -1
+        self.v_insp_hierarchy.set(str(hier) if hier >= 0 else "N/A")
 
     def _on_save_node(self) -> None:
         """Save inspector edits back to the in-memory DataFrame and CSV."""
@@ -1124,6 +1136,7 @@ class GalaxyGUI:
         self.v_insp_pop.set(0)
         self.v_insp_admin_lvl.set(0)
         self.v_insp_admin_dist.set("")
+        self.v_insp_hierarchy.set("")
         self._status("Deselected.")
         if not self._is_busy() and self._canvas_widget is not None:
             self._set_busy(True)

@@ -13,6 +13,8 @@ After spatial generation, worldbuilding attributes are assigned to every node:
   • pop        – population index 0-100 (0 = uninhabited / isolated)
   • admin_lvl  – administrative hierarchy level 0-5 (0 = none)
   • admin_dist – minimum hop-count to the nearest admin node (−1 if none exist)
+  • hierarchy  – integer index of the admin-level-1 domain this node belongs to
+                 (−1 if unpopulated or unreachable from any lvl-1 root)
 
 Constraints enforced
 --------------------
@@ -297,6 +299,113 @@ def compute_degree(n_nodes: int, edges: pd.DataFrame) -> np.ndarray:
         np.add.at(degree, src, 1)
         np.add.at(degree, tgt, 1)
     return degree
+
+
+def compute_hierarchy(nodes: pd.DataFrame, edges: pd.DataFrame) -> np.ndarray:
+    """Assign each populated node to a discrete administrative hierarchy.
+
+    The hierarchy chain runs from a node to the nearest node at the lowest
+    extant admin level (e.g. admin_lvl 5), then hop-by-hop up through each
+    extant level until reaching an admin-level-1 root.  "Nearest" means
+    fewest graph hops, not Euclidean distance.
+
+    Each admin-level-1 node is the root of one discrete hierarchy.  Every
+    populated non-admin node that can reach a chain back to an admin-level-1
+    node is assigned the integer index of that root (0-based, ordered by
+    ascending node ID of lvl-1 nodes).
+
+    Parameters
+    ----------
+    nodes : DataFrame  – must contain 'admin_lvl' and 'pop' columns
+    edges : DataFrame  – must contain 'source' and 'target' columns
+
+    Returns
+    -------
+    hierarchy : int64 array of length len(nodes)
+        Non-negative integer = hierarchy index shared by all nodes in the
+        same administrative domain.  −1 = unassigned (unpopulated or
+        unreachable from any admin-level-1 root through the chain).
+    """
+    n = len(nodes)
+    hierarchy = np.full(n, -1, dtype=np.int64)
+
+    admin_lvl_arr = nodes["admin_lvl"].values
+    pop_arr       = nodes["pop"].values
+
+    # Determine which admin levels actually have at least one node.
+    extant = sorted(lvl for lvl in range(1, 6) if (admin_lvl_arr == lvl).any())
+
+    # Hierarchy requires at least one admin-level-1 root node.
+    if not extant or extant[0] != 1:
+        return hierarchy
+
+    # Build adjacency list.
+    adj: list[list[int]] = [[] for _ in range(n)]
+    if len(edges) > 0:
+        src = edges["source"].values.astype(int)
+        tgt = edges["target"].values.astype(int)
+        for s, t in zip(src, tgt):
+            adj[s].append(t)
+            adj[t].append(s)
+
+    # Node-index lists per extant admin level.
+    level_nodes: dict[int, np.ndarray] = {
+        lvl: np.where(admin_lvl_arr == lvl)[0] for lvl in extant
+    }
+
+    # Step 1 – each admin-level-1 node seeds its own hierarchy ID.
+    for hier_id, node_id in enumerate(level_nodes[1]):
+        hierarchy[int(node_id)] = hier_id
+
+    # Step 2 – propagate hierarchy downward through consecutive extant levels.
+    # For the transition parent_lvl → child_lvl, BFS outward from every
+    # parent-level node that already has a hierarchy assignment and stamp
+    # the first-contact child-level nodes with that hierarchy.
+    for i in range(1, len(extant)):
+        parent_lvl = extant[i - 1]
+        child_lvl  = extant[i]
+        child_set  = {int(x) for x in level_nodes[child_lvl]}
+
+        visited: dict[int, int] = {}
+        q: deque[int] = deque()
+        for p in level_nodes[parent_lvl]:
+            p = int(p)
+            if hierarchy[p] >= 0:
+                visited[p] = int(hierarchy[p])
+                q.append(p)
+
+        while q:
+            node = q.popleft()
+            for nb in adj[node]:
+                if nb not in visited:
+                    visited[nb] = visited[node]
+                    if nb in child_set:
+                        hierarchy[nb] = visited[nb]
+                    q.append(nb)
+
+    # Step 3 – assign populated non-admin nodes to the nearest node at the
+    # lowest extant admin level (e.g. admin_lvl 5 if present).
+    lowest_lvl = extant[-1]
+    is_target  = (pop_arr > 0) & (admin_lvl_arr == 0)
+
+    visited3: dict[int, int] = {}
+    q3: deque[int] = deque()
+    for ln in level_nodes[lowest_lvl]:
+        ln = int(ln)
+        if hierarchy[ln] >= 0:
+            visited3[ln] = int(hierarchy[ln])
+            q3.append(ln)
+
+    while q3:
+        node = q3.popleft()
+        for nb in adj[node]:
+            if nb not in visited3:
+                visited3[nb] = visited3[node]
+                if is_target[nb]:
+                    hierarchy[nb] = visited3[nb]
+                q3.append(nb)
+
+    return hierarchy
 
 
 def compute_admin_dist(nodes: pd.DataFrame, edges: pd.DataFrame) -> np.ndarray:
@@ -965,8 +1074,8 @@ class GalaxyGenerator:
 
         Returns
         -------
-        nodes : DataFrame with uid, name, pop, admin_lvl, admin_dist columns
-                added (or replaced if already present).
+        nodes : DataFrame with uid, name, pop, admin_lvl, admin_dist, hierarchy
+                columns added (or replaced if already present).
         """
         n = len(nodes)
         degree = compute_degree(n, edges)
@@ -991,8 +1100,13 @@ class GalaxyGenerator:
         # admin_dist requires admin_lvl column
         nodes["admin_dist"] = compute_admin_dist(nodes, edges)
 
+        # hierarchy requires admin_lvl, pop, and edges
+        nodes["hierarchy"] = compute_hierarchy(nodes, edges)
+
+        n_hier = int((nodes["hierarchy"] >= 0).sum())
         print(f"  {int((pop > 0).sum()):,} inhabited systems, "
-              f"{int((admin_lvl > 0).sum()):,} admin centres assigned.")
+              f"{int((admin_lvl > 0).sum()):,} admin centres, "
+              f"{n_hier:,} nodes placed in hierarchies.")
         return nodes
 
     # ------------------------------------------------------------------
@@ -1103,7 +1217,7 @@ class GalaxyGenerator:
 
         # Nodes – cast to plain Python types so networkx serialises cleanly
         attr_cols = ["x", "y", "r", "theta", "arm_dist",
-                     "uid", "name", "pop", "admin_lvl", "admin_dist"]
+                     "uid", "name", "pop", "admin_lvl", "admin_dist", "hierarchy"]
         for row in nodes.itertuples(index=False):
             attrs = {col: getattr(row, col)
                      for col in attr_cols if hasattr(row, col)}
@@ -1111,7 +1225,7 @@ class GalaxyGenerator:
             for k in ["x", "y", "r", "theta", "arm_dist"]:
                 if k in attrs:
                     attrs[k] = float(attrs[k])
-            for k in ["pop", "admin_lvl", "admin_dist"]:
+            for k in ["pop", "admin_lvl", "admin_dist", "hierarchy"]:
                 if k in attrs:
                     attrs[k] = int(attrs[k])
             G.add_node(int(row.id), **attrs)
@@ -1146,7 +1260,7 @@ class GalaxyGenerator:
         Returns
         -------
         nodes_df : DataFrame  (id, x, y, r, theta, arm_dist,
-                               uid, name, pop, admin_lvl, admin_dist)
+                               uid, name, pop, admin_lvl, admin_dist, hierarchy)
         edges_df : DataFrame  (source, target, length, weight)
         """
         cfg = self.cfg
