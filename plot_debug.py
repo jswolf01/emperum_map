@@ -177,8 +177,10 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
 
     # ── Figure setup ─────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 10))
-    # Equal initial ranges give square aspect without set_aspect locking the box.
-    # This lets scroll-zoom and drag-pan work freely in the embedded canvas.
+    # Equal data aspect keeps the galaxy circular and edges aligned to nodes
+    # regardless of canvas size.  "datalim" lets the axes fill available space
+    # (no whitespace) and adjusts the shown data range instead of the box size.
+    ax.set_aspect("equal", adjustable="datalim")
 
     BG = "#09090f"
     ax.set_facecolor(BG)
@@ -187,6 +189,8 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
     margin = args.r_disk * 1.08
     ax.set_xlim(-margin, margin)
     ax.set_ylim(-margin, margin)
+    # Disable automatic limit expansion so scatter/collections never shift limits.
+    ax.autoscale(False)
 
     # ── Disk boundary ─────────────────────────────────────────────────────
     disk_circle = plt.Circle(
@@ -275,6 +279,9 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
         cbar.set_label(clabel, color="white", fontsize=9)
         cbar.ax.yaxis.set_tick_params(color="white", labelsize=7)
         plt.setp(plt.getp(cbar.ax.axes, "yticklabels"), color="white")
+    # Re-lock limits after colorbar; colorbar resizes ax but must not shift data coords.
+    ax.set_xlim(-margin, margin)
+    ax.set_ylim(-margin, margin)
 
     # ── Search / selection highlights ─────────────────────────────────────
     found_nodes = getattr(args, "found_nodes", None)
