@@ -5,12 +5,15 @@ Tkinter GUI front-end for the Emperum galaxy generator.
 
 Layout
 ------
-Left panel   – generation parameters (spatial, edges, arms, density, output,
-               appearance) – scrollable, collapsible sections.
+Left panel   – tabbed:
+                 • Generation   – spatial, edges, arms, density, sampling.
+                 • Appearance   – output directory, node/edge colours and sizes.
 Centre panel – embedded matplotlib preview with zoom/pan and scroll-wheel zoom.
-Right panel  – worldbuilding attributes (population, admin hierarchy),
-               node inspector (select a node to view/edit its attributes),
-               and search functionality.
+Right panel  – tabbed:
+                 • Attributes      – population and admin-level parameters.
+                 • Inspect & Search – node inspector (click to select) + search.
+                 • Filter View     – reduced-view filter: hide/show nodes by
+                                    attribute conditions with AND/OR logic.
 
 Usage
 -----
@@ -290,6 +293,15 @@ class GalaxyGUI:
         self.v_search_query   = sv(value="")
         self.v_search_result  = sv(value="")
 
+        # ── Filter (reduced view) ─────────────────────────────────────────
+        self.v_filter_enabled = bv(value=False)
+        self.v_filter_logic   = sv(value="AND")   # AND | OR
+        self.v_filter_action  = sv(value="hide_matching")  # hide_matching | show_only
+        self.v_filter_status  = sv(value="")
+        # Dynamic list of condition rows – each entry is a dict with keys:
+        #   attr_var, op_var, val_var, val2_var, frame, to_label, val2_entry
+        self._filter_rows: list[dict] = []
+        self._filter_container: tk.Frame | None = None  # set when tab is built
         # ── Reduced-view filter ───────────────────────────────────────────
         self.v_filter_active = bv(value=False)
         self.v_filter_logic  = sv(value="AND")
@@ -330,8 +342,21 @@ class GalaxyGUI:
         self._build_preview_panel(centre_frame)
         self._build_attr_panel(right_outer)
 
-    # ── Left parameter panel ──────────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────
 
+    def _make_scrollable(self, parent: ttk.Frame) -> ttk.Frame:
+        """Create a vertically-scrollable pane inside *parent*.
+
+        Returns the inner ``ttk.Frame`` into which content should be packed.
+        """
+        canvas = tk.Canvas(parent, highlightthickness=0, borderwidth=0)
+        vscroll = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vscroll.set)
+        vscroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        inner = ttk.Frame(canvas)
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
     @staticmethod
     def _make_scrollable_tab(tab_frame: ttk.Frame):
         """Create a scrollable canvas inside a tab frame; return the inner content Frame."""
@@ -347,6 +372,27 @@ class GalaxyGUI:
                    lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>",
                     lambda e: canvas.itemconfigure(win_id, width=e.width))
+
+        def _wheel(evt):
+            if evt.delta:
+                canvas.yview_scroll(int(-1 * evt.delta / 120), "units")
+        canvas.bind("<MouseWheel>", _wheel)
+        canvas.bind("<Button-4>", lambda _e: canvas.yview_scroll(-1, "units"))
+        canvas.bind("<Button-5>", lambda _e: canvas.yview_scroll(1, "units"))
+
+        return inner
+
+    # ── Left parameter panel ──────────────────────────────────────────────
+
+    def _build_param_panel(self, parent: ttk.Frame) -> None:
+        """Tabbed left panel: Generation | Appearance."""
+        nb = ttk.Notebook(parent)
+        nb.pack(fill="both", expand=True)
+
+        gen_frame = ttk.Frame(nb)
+        app_frame = ttk.Frame(nb)
+        nb.add(gen_frame, text="Generation")
+        nb.add(app_frame, text="Appearance")
         canvas.bind("<MouseWheel>",
                     lambda e: canvas.yview_scroll(int(-1 * e.delta / 120), "units"))
         canvas.bind("<Button-4>", lambda _e: canvas.yview_scroll(-1, "units"))
@@ -366,6 +412,12 @@ class GalaxyGUI:
         gen  = self._make_scrollable_tab(gen_tab)
         app  = self._make_scrollable_tab(app_tab)
 
+        self._build_generation_tab(gen_frame)
+        self._build_appearance_tab(app_frame)
+
+    def _build_generation_tab(self, parent: ttk.Frame) -> None:
+        """Generation parameters: spatial, edges, arms, density, sampling."""
+        inner = self._make_scrollable(parent)
         LW = 24
 
         # ── Generation tab ────────────────────────────────────────────
@@ -397,6 +449,8 @@ class GalaxyGUI:
         s = sec.inner
         SliderEntry(s, "Scale length (r_scale)", self.v_r_scale, 5.0, 200.0, 1.0, label_width=LW).pack(fill="x")
 
+        # ── Sampling & Seed ───────────────────────────────────────────
+        sec = Section(inner, "Sampling & Seed")
         sec = Section(gen, "Sampling & Reproducibility")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
@@ -407,6 +461,13 @@ class GalaxyGUI:
         ttk.Spinbox(row, from_=0, to=99_999, increment=1,
                     textvariable=self.v_seed, width=8).pack(side="left")
 
+    def _build_appearance_tab(self, parent: ttk.Frame) -> None:
+        """Output directory + GEXF export + node/edge appearance."""
+        inner = self._make_scrollable(parent)
+        LW = 24
+
+        # ── Output ────────────────────────────────────────────────────
+        sec = Section(inner, "Output")
         sec = Section(gen, "Output")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
@@ -435,6 +496,16 @@ class GalaxyGUI:
             state="readonly", width=11,
         ).pack(side="left")
         SliderEntry(s, "Node size", self.v_node_size, 0.1, 20.0, 0.1, label_width=LW).pack(fill="x")
+        ColorEntry(s,  "Flat color  (mode: none)", self.v_node_color, label_width=LW).pack(fill="x")
+        ColorEntry(s,  "Gradient low  (low value)",  self.v_grad_low,   label_width=LW).pack(fill="x")
+        ColorEntry(s,  "Gradient high  (high value)", self.v_grad_high,  label_width=LW).pack(fill="x")
+        ttk.Label(s, text=(
+            "  Gradient colors apply to arm_dist and r modes.\n"
+            "  Other modes use built-in semantic colormaps."
+        ), foreground="#888888", wraplength=310, justify="left").pack(anchor="w", padx=6)
+
+        # ── Edge Appearance ───────────────────────────────────────────
+        sec = Section(inner, "Edge Appearance")
         ColorEntry(s, "Flat color  (mode: none)", self.v_node_color, label_width=LW).pack(fill="x")
         ColorEntry(s, "Gradient low",             self.v_grad_low,   label_width=LW).pack(fill="x")
         ColorEntry(s, "Gradient high",            self.v_grad_high,  label_width=LW).pack(fill="x")
@@ -447,6 +518,8 @@ class GalaxyGUI:
         s = sec.inner
         ttk.Checkbutton(s, text="Hide edges  (much faster for N > 1 000)",
                         variable=self.v_no_edges).pack(anchor="w", padx=4, pady=2)
+        ColorEntry(s, "Edge color", self.v_edge_color, label_width=LW).pack(fill="x")
+        SliderEntry(s, "Edge width",   self.v_edge_width, 0.1, 5.0, 0.1, label_width=LW).pack(fill="x")
         ColorEntry(s, "Edge color",    self.v_edge_color, label_width=LW).pack(fill="x")
         SliderEntry(s, "Edge width",   self.v_edge_width, 0.1, 5.0, 0.1,  label_width=LW).pack(fill="x")
         SliderEntry(s, "Edge opacity", self.v_edge_alpha, 0.0, 1.0, 0.05, label_width=LW).pack(fill="x")
@@ -454,6 +527,17 @@ class GalaxyGUI:
     # ── Right attribute panel ──────────────────────────────────────────────
 
     def _build_attr_panel(self, parent: ttk.Frame) -> None:
+        """Tabbed right panel: Attributes | Inspect & Search | Filter."""
+        nb = ttk.Notebook(parent)
+        nb.pack(fill="both", expand=True)
+
+        attr_frame   = ttk.Frame(nb)
+        insp_frame   = ttk.Frame(nb)
+        filter_frame = ttk.Frame(nb)
+
+        nb.add(attr_frame,   text="Attributes")
+        nb.add(insp_frame,   text="Inspect & Search")
+        nb.add(filter_frame, text="Filter View")
         """Right panel — four tabs: Attributes, Inspector, Search, Filter."""
         nb = ttk.Notebook(parent)
         nb.pack(fill="both", expand=True)
@@ -469,12 +553,21 @@ class GalaxyGUI:
 
         attr_inner = self._make_scrollable_tab(attr_tab)
 
-        RLW = 22   # label width for right panel
+        self._build_attributes_tab(attr_frame)
+        self._build_inspect_tab(insp_frame)
+        self._build_filter_tab(filter_frame)
+
+    def _build_attributes_tab(self, parent: ttk.Frame) -> None:
+        """Population, admin levels, and Apply Attributes button."""
+        inner = self._make_scrollable(parent)
+        RLW = 22
 
         # ── Attributes tab ────────────────────────────────────────────
 
         ttk.Button(attr_inner, text="Apply Attributes",
                    command=self._on_apply_attrs).pack(fill="x", padx=6, pady=(6, 2))
+        ttk.Label(inner,
+                  text="Re-assigns pop/admin without regenerating the spatial layout.",
         ttk.Label(attr_inner,
                   text="Re-assigns pop/admin without regenerating spatial layout.",
                   foreground="#888888", wraplength=330,
@@ -540,6 +633,16 @@ class GalaxyGUI:
             "  Lower = centres can cluster; higher = forced wide spread."
         ), foreground="#888888", wraplength=320).pack(anchor="w", padx=6)
 
+    def _build_inspect_tab(self, parent: ttk.Frame) -> None:
+        """Node inspector + search in a scrollable tab."""
+        inner = self._make_scrollable(parent)
+        RLW = 22
+
+        # ── Node Inspector ────────────────────────────────────────────
+        sec = Section(inner, "Node Inspector", start_open=True)
+        sec.pack(fill="x", padx=4, pady=3)
+        self._inspector_section = sec
+        s = sec.inner
         # ── Inspector tab ─────────────────────────────────────────────
 
         s = ttk.Frame(insp_tab, padding=(4, 4))
@@ -684,6 +787,247 @@ class GalaxyGUI:
                   foreground="#888888", wraplength=310, justify="left").pack(
             anchor="w", padx=8)
 
+    # ── Filter / Reduced View tab ─────────────────────────────────────────
+
+    def _build_filter_tab(self, parent: ttk.Frame) -> None:
+        """Reduced-view filter builder.
+
+        Lets the user define one or more attribute conditions.  When applied,
+        nodes that match (or do not match, depending on action) are hidden from
+        the preview along with all edges connected to them.
+        """
+        inner = self._make_scrollable(parent)
+
+        # ── Enable toggle ─────────────────────────────────────────────
+        top = ttk.Frame(inner)
+        top.pack(fill="x", padx=6, pady=(6, 2))
+        ttk.Checkbutton(
+            top, text="Enable Filter View",
+            variable=self.v_filter_enabled,
+        ).pack(side="left")
+
+        # ── Logic & Action ────────────────────────────────────────────
+        opts = ttk.Frame(inner)
+        opts.pack(fill="x", padx=6, pady=2)
+
+        ttk.Label(opts, text="Logic:", anchor="w").pack(side="left", padx=(0, 2))
+        ttk.Combobox(
+            opts, textvariable=self.v_filter_logic,
+            values=["AND", "OR"], state="readonly", width=5,
+        ).pack(side="left", padx=(0, 10))
+
+        ttk.Label(opts, text="Action:", anchor="w").pack(side="left", padx=(0, 2))
+        ttk.Radiobutton(
+            opts, text="Hide matching",
+            variable=self.v_filter_action, value="hide_matching",
+        ).pack(side="left")
+        ttk.Radiobutton(
+            opts, text="Show only matching",
+            variable=self.v_filter_action, value="show_only",
+        ).pack(side="left", padx=(4, 0))
+
+        # ── Column headers ────────────────────────────────────────────
+        hdr = ttk.Frame(inner)
+        hdr.pack(fill="x", padx=6, pady=(6, 0))
+        ttk.Label(hdr, text="Attribute", width=11, anchor="w").pack(side="left")
+        ttk.Label(hdr, text="Op",       width=8,  anchor="w").pack(side="left")
+        ttk.Label(hdr, text="Value",    width=9,  anchor="w").pack(side="left")
+        ttk.Label(hdr, text="To",       width=8,  anchor="w").pack(side="left")
+        ttk.Separator(inner, orient="horizontal").pack(fill="x", padx=6)
+
+        # ── Condition rows container ───────────────────────────────────
+        self._filter_container = ttk.Frame(inner)
+        self._filter_container.pack(fill="x", padx=6, pady=2)
+
+        # ── Add condition button ───────────────────────────────────────
+        ttk.Button(
+            inner, text="+ Add Condition",
+            command=lambda: self._add_filter_row(self._filter_container),
+        ).pack(anchor="w", padx=6, pady=(4, 2))
+
+        # ── Apply / Clear ──────────────────────────────────────────────
+        btn_row = ttk.Frame(inner)
+        btn_row.pack(fill="x", padx=6, pady=4)
+        ttk.Button(btn_row, text="Apply Filter",
+                   command=self._apply_filter_and_preview).pack(side="left", padx=(0, 6))
+        ttk.Button(btn_row, text="Clear All",
+                   command=self._clear_filter).pack(side="left")
+
+        # ── Status ────────────────────────────────────────────────────
+        ttk.Label(inner, textvariable=self.v_filter_status,
+                  foreground="#88aaff", wraplength=320,
+                  justify="left").pack(anchor="w", padx=6, pady=2)
+
+        ttk.Label(inner, text=(
+            "Tip: Use AND to narrow down (must meet all conditions).\n"
+            "Use OR to broaden (must meet at least one condition).\n"
+            "\"between\" range uses the Val and To fields together."
+        ), foreground="#888888", wraplength=330,
+            justify="left").pack(anchor="w", padx=6, pady=(4, 6))
+
+        # Seed with one blank condition row so the tab isn't empty
+        self._add_filter_row(self._filter_container)
+
+    def _add_filter_row(self, container: ttk.Frame) -> None:
+        """Append a new condition row to the filter container."""
+        _ATTRS = ["pop", "admin_lvl", "admin_dist", "hierarchy",
+                  "r", "arm_dist", "name", "uid", "id"]
+        _OPS   = ["=", ">", "<", ">=", "<=", "between", "contains"]
+
+        attr_var = tk.StringVar(value="pop")
+        op_var   = tk.StringVar(value="=")
+        val_var  = tk.StringVar(value="")
+        val2_var = tk.StringVar(value="")
+
+        row = ttk.Frame(container)
+        row.pack(fill="x", pady=2)
+
+        ttk.Combobox(row, textvariable=attr_var,
+                     values=_ATTRS, state="readonly", width=10).pack(side="left", padx=(0, 2))
+
+        op_cb = ttk.Combobox(row, textvariable=op_var,
+                             values=_OPS, state="readonly", width=7)
+        op_cb.pack(side="left", padx=(0, 2))
+
+        ttk.Entry(row, textvariable=val_var, width=8).pack(side="left", padx=(0, 2))
+
+        to_label = ttk.Label(row, text="to")
+        to_label.pack(side="left", padx=(0, 2))
+
+        val2_entry = ttk.Entry(row, textvariable=val2_var, width=8)
+        val2_entry.pack(side="left", padx=(0, 4))
+
+        row_info = dict(
+            attr_var=attr_var, op_var=op_var,
+            val_var=val_var, val2_var=val2_var,
+            frame=row, to_label=to_label, val2_entry=val2_entry,
+        )
+
+        # Show/hide the "to" field based on operator
+        def _op_changed(*_):
+            if op_var.get() == "between":
+                to_label.pack(side="left", padx=(0, 2))
+                val2_entry.pack(side="left", padx=(0, 4))
+            else:
+                to_label.pack_forget()
+                val2_entry.pack_forget()
+
+        op_var.trace_add("write", _op_changed)
+        _op_changed()   # apply initial state
+
+        ttk.Button(
+            row, text="✕", width=2,
+            command=lambda ri=row_info: self._remove_filter_row(ri),
+        ).pack(side="left")
+
+        self._filter_rows.append(row_info)
+
+    def _remove_filter_row(self, row_info: dict) -> None:
+        """Remove a condition row from the filter list."""
+        row_info["frame"].destroy()
+        if row_info in self._filter_rows:
+            self._filter_rows.remove(row_info)
+
+    def _compute_hidden_nodes(self) -> set:
+        """Evaluate the active filter and return a set of node indices to hide.
+
+        Returns an empty set when the filter is disabled or no data is loaded.
+        """
+        if not self.v_filter_enabled.get() or self._nodes_df is None:
+            return set()
+        if not self._filter_rows:
+            return set()
+
+        n = len(self._nodes_df)
+        masks: list[np.ndarray] = []
+
+        for row_info in self._filter_rows:
+            attr = row_info["attr_var"].get()
+            op   = row_info["op_var"].get()
+            val  = row_info["val_var"].get().strip()
+
+            if not attr or not val:
+                continue
+            if attr not in self._nodes_df.columns:
+                continue
+
+            col = self._nodes_df[attr]
+            try:
+                if op == "contains":
+                    mask = col.astype(str).str.contains(val, case=False, na=False)
+                elif op == "=":
+                    try:
+                        mask = col == float(val)
+                    except ValueError:
+                        mask = col.astype(str) == val
+                elif op == ">":
+                    mask = col.astype(float) > float(val)
+                elif op == "<":
+                    mask = col.astype(float) < float(val)
+                elif op == ">=":
+                    mask = col.astype(float) >= float(val)
+                elif op == "<=":
+                    mask = col.astype(float) <= float(val)
+                elif op == "between":
+                    val2 = row_info["val2_var"].get().strip()
+                    if not val2:
+                        continue
+                    lo, hi = float(val), float(val2)
+                    mask = (col.astype(float) >= lo) & (col.astype(float) <= hi)
+                else:
+                    continue
+                masks.append(mask.values.astype(bool))
+            except Exception:
+                continue
+
+        if not masks:
+            return set()
+
+        # Combine with AND or OR
+        if self.v_filter_logic.get() == "AND":
+            combined = np.ones(n, dtype=bool)
+            for m in masks:
+                combined &= m
+        else:  # OR
+            combined = np.zeros(n, dtype=bool)
+            for m in masks:
+                combined |= m
+
+        action = self.v_filter_action.get()
+        if action == "show_only":
+            hidden_mask = ~combined       # hide non-matching
+        else:                             # hide_matching
+            hidden_mask = combined        # hide matching
+
+        return set(int(i) for i in np.where(hidden_mask)[0])
+
+    def _apply_filter_and_preview(self) -> None:
+        """Evaluate the filter, update status, and refresh the preview."""
+        if self._nodes_df is None:
+            messagebox.showwarning("No data", "Generate or load data first.")
+            return
+        hidden = self._compute_hidden_nodes()
+        total  = len(self._nodes_df)
+        visible = total - len(hidden)
+        self.v_filter_status.set(
+            f"Filter {'active' if self.v_filter_enabled.get() else 'inactive'}  —  "
+            f"{visible:,} of {total:,} nodes visible."
+        )
+        if not self._is_busy() and self._canvas_widget is not None:
+            self._set_busy(True)
+            self._worker = threading.Thread(target=self._preview_worker, daemon=True)
+            self._worker.start()
+
+    def _clear_filter(self) -> None:
+        """Remove all condition rows and disable the filter."""
+        for row_info in list(self._filter_rows):
+            row_info["frame"].destroy()
+        self._filter_rows.clear()
+        self.v_filter_enabled.set(False)
+        self.v_filter_status.set("")
+        if self._filter_container is not None:
+            self._add_filter_row(self._filter_container)
+
     # ── Preview panel (centre) ─────────────────────────────────────────────
 
     def _build_preview_panel(self, parent: ttk.Frame) -> None:
@@ -797,6 +1141,7 @@ class GalaxyGUI:
             r_arm_start         = 3.0,
             selected_nodes      = selected or [],
             found_nodes         = found or [],
+            hidden_nodes        = list(self._compute_hidden_nodes()),
             node_mask           = self._compute_node_mask(),
         )
         return ns
