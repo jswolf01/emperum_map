@@ -7,8 +7,9 @@ Shows:
   • Disk boundary circle
   • Forbidden core circle (shaded)
   • Spiral arm centrelines (reference only, not enforced as hard structure)
-  • Nodes coloured by arm_dist, radius, pop, admin_lvl, or admin_dist
+  • Nodes coloured by arm_dist, radius, pop, admin_lvl, admin_dist, or hierarchy
   • L-way edges (optional; can be slow for N > 1000 – use --no_edges)
+  • In hierarchy mode, both nodes and edges are tinted by their admin domain
 
 Usage
 -----
@@ -59,6 +60,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -96,7 +98,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no_edges", action="store_true",
                    help="Skip drawing edges (much faster for large graphs).")
     p.add_argument("--color_by",
-                   choices=["arm_dist", "r", "none", "pop", "admin_lvl", "admin_dist"],
+                   choices=["arm_dist", "r", "none", "pop", "admin_lvl", "admin_dist",
+                            "hierarchy"],
                    default="arm_dist",
                    help="Node colouring scheme.")
 
@@ -132,6 +135,24 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 # Plot
 # ---------------------------------------------------------------------------
+
+def _hierarchy_color(idx: int) -> tuple:
+    """Return an RGB triple for hierarchy index *idx*.
+
+    Uses golden-ratio hue spacing in HSV space so that consecutive indices
+    remain perceptually distinct even for large numbers of hierarchies.
+    """
+    golden_ratio = 0.618033988749895
+    h = (0.10 + idx * golden_ratio) % 1.0
+    s, v = 0.82, 0.88
+    hi  = int(h * 6) % 6
+    f   = h * 6 - int(h * 6)
+    p   = v * (1.0 - s)
+    q   = v * (1.0 - s * f)
+    t   = v * (1.0 - s * (1.0 - f))
+    rgb = [(v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q)][hi]
+    return rgb
+
 
 def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
     """Load CSV files and draw the galaxy plot.
@@ -213,62 +234,107 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
             color="#2a3a4a", linewidth=1.0, alpha=0.6, zorder=4,
         )
 
+    # ── Hierarchy pre-computation ─────────────────────────────────────────
+    # Resolved early so it can colour both edges and nodes in hierarchy mode.
+    color_by = getattr(args, "color_by", "arm_dist")
+
+    _HIER_UNASSIGNED = (0.06, 0.06, 0.08)   # dark near-black for unassigned nodes
+    _HIER_CROSS_EDGE = (0.08, 0.08, 0.12, 0.12)  # very dim for cross-hierarchy edges
+    _h_vals: Optional[np.ndarray]   = None   # int64 hierarchy array (length = n nodes)
+    _hmap:   dict                   = {}     # hierarchy_id -> RGB triple
+    _hier_node_rgba: Optional[np.ndarray] = None  # (n, 4) float32 for scatter
+
+    if color_by == "hierarchy" and "hierarchy" in nodes.columns:
+        _h_vals    = nodes["hierarchy"].values.astype(np.int64)
+        _unique_h  = sorted(int(v) for v in np.unique(_h_vals) if v >= 0)
+        _hmap      = {h: _hierarchy_color(i) for i, h in enumerate(_unique_h)}
+        _hier_node_rgba = np.array(
+            [(*_hmap.get(int(h), _HIER_UNASSIGNED), 0.85) if h >= 0
+             else (*_HIER_UNASSIGNED, 0.30)
+             for h in _h_vals],
+            dtype=np.float32,
+        )
+
     # ── Edges ─────────────────────────────────────────────────────────────
     if not getattr(args, "no_edges", False) and len(edges) > 0:
         xy  = nodes[["x", "y"]].values
         src = edges["source"].values.astype(int)
         tgt = edges["target"].values.astype(int)
         segs = [[xy[s], xy[t]] for s, t in zip(src, tgt)]
-        lc = LineCollection(
-            segs,
-            colors=args.edge_color,
-            linewidths=args.edge_width,
-            alpha=args.edge_alpha,
-            zorder=5,
-        )
+
+        if _h_vals is not None:
+            # Hierarchy mode: colour edges that share a hierarchy; dim the rest.
+            ec = [
+                (*_hmap.get(int(_h_vals[s]), _HIER_UNASSIGNED), 0.55)
+                if (_h_vals[s] >= 0 and int(_h_vals[s]) == int(_h_vals[t]))
+                else _HIER_CROSS_EDGE
+                for s, t in zip(src, tgt)
+            ]
+            lc = LineCollection(segs, colors=ec,
+                                linewidths=args.edge_width, zorder=5)
+        else:
+            lc = LineCollection(
+                segs,
+                colors=args.edge_color,
+                linewidths=args.edge_width,
+                alpha=args.edge_alpha,
+                zorder=5,
+            )
         ax.add_collection(lc)
 
     # ── Nodes ─────────────────────────────────────────────────────────────
     x = nodes["x"].values
     y = nodes["y"].values
 
-    grad_cmap = LinearSegmentedColormap.from_list(
-        "user_gradient", [args.gradient_low_color, args.gradient_high_color]
-    )
+    sc     = None
+    clabel = None
+    cmap   = None
 
-    color_by = getattr(args, "color_by", "arm_dist")
-
-    # Colormaps for worldbuilding attributes
-    _POP_CMAP   = LinearSegmentedColormap.from_list(
-        "pop", ["#0a0a1a", "#1a3a6a", "#2266cc", "#44aaff", "#ffffff"])
-    _ADMIN_CMAP = LinearSegmentedColormap.from_list(
-        "admin", ["#111111", "#331100", "#884400", "#cc6600", "#ff9900", "#ffff44"])
-    _DIST_CMAP  = LinearSegmentedColormap.from_list(
-        "adist", ["#ffff44", "#66aa22", "#116633", "#003322", "#000a0a"])
-
-    if color_by == "arm_dist" and "arm_dist" in nodes.columns:
-        c, cmap, clabel = nodes["arm_dist"].values, grad_cmap, "Arm distance"
-    elif color_by == "r" and "r" in nodes.columns:
-        c, cmap, clabel = nodes["r"].values, grad_cmap, "Radius"
-    elif color_by == "pop" and "pop" in nodes.columns:
-        c, cmap, clabel = nodes["pop"].values, _POP_CMAP, "Population"
-    elif color_by == "admin_lvl" and "admin_lvl" in nodes.columns:
-        c, cmap, clabel = nodes["admin_lvl"].values, _ADMIN_CMAP, "Admin level"
-    elif color_by == "admin_dist" and "admin_dist" in nodes.columns:
-        raw = nodes["admin_dist"].values.astype(float)
-        raw[raw < 0] = raw[raw >= 0].max() + 1 if (raw >= 0).any() else 0
-        c, cmap, clabel = raw, _DIST_CMAP, "Admin distance (hops)"
+    if _hier_node_rgba is not None:
+        # Hierarchy mode: categorical RGBA colours, no gradient colorbar.
+        sc = ax.scatter(
+            x, y,
+            c=_hier_node_rgba,
+            s=args.node_size,
+            linewidths=0,
+            zorder=6,
+        )
     else:
-        c, cmap, clabel = args.node_color, None, None
+        grad_cmap = LinearSegmentedColormap.from_list(
+            "user_gradient", [args.gradient_low_color, args.gradient_high_color]
+        )
 
-    sc = ax.scatter(
-        x, y,
-        c=c, cmap=cmap,
-        s=args.node_size,
-        alpha=0.75,
-        linewidths=0,
-        zorder=6,
-    )
+        # Colormaps for worldbuilding attributes
+        _POP_CMAP   = LinearSegmentedColormap.from_list(
+            "pop", ["#0a0a1a", "#1a3a6a", "#2266cc", "#44aaff", "#ffffff"])
+        _ADMIN_CMAP = LinearSegmentedColormap.from_list(
+            "admin", ["#111111", "#331100", "#884400", "#cc6600", "#ff9900", "#ffff44"])
+        _DIST_CMAP  = LinearSegmentedColormap.from_list(
+            "adist", ["#ffff44", "#66aa22", "#116633", "#003322", "#000a0a"])
+
+        if color_by == "arm_dist" and "arm_dist" in nodes.columns:
+            c, cmap, clabel = nodes["arm_dist"].values, grad_cmap, "Arm distance"
+        elif color_by == "r" and "r" in nodes.columns:
+            c, cmap, clabel = nodes["r"].values, grad_cmap, "Radius"
+        elif color_by == "pop" and "pop" in nodes.columns:
+            c, cmap, clabel = nodes["pop"].values, _POP_CMAP, "Population"
+        elif color_by == "admin_lvl" and "admin_lvl" in nodes.columns:
+            c, cmap, clabel = nodes["admin_lvl"].values, _ADMIN_CMAP, "Admin level"
+        elif color_by == "admin_dist" and "admin_dist" in nodes.columns:
+            raw = nodes["admin_dist"].values.astype(float)
+            raw[raw < 0] = raw[raw >= 0].max() + 1 if (raw >= 0).any() else 0
+            c, cmap, clabel = raw, _DIST_CMAP, "Admin distance (hops)"
+        else:
+            c, cmap, clabel = args.node_color, None, None
+
+        sc = ax.scatter(
+            x, y,
+            c=c, cmap=cmap,
+            s=args.node_size,
+            alpha=0.75,
+            linewidths=0,
+            zorder=6,
+        )
 
     if clabel and cmap:
         cbar = plt.colorbar(sc, ax=ax, pad=0.01, fraction=0.03, shrink=0.85)
