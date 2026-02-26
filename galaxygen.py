@@ -688,20 +688,144 @@ class GalaxyGenerator:
 
         selected = shuffled[np.array(all_idx, dtype=np.int64)]
         n_components = len({_find(int(i)) for i in range(n)})
-        print(f"  Connected components among eligible nodes: {n_components:,} "
+        print(f"  Connected components after spanning forest: {n_components:,} "
               f"(spanning forest used {n_span:,} edges)")
 
+        # ---- bridge isolated components into a single connected graph ----
+        # The spanning forest guarantees that every node with at least one
+        # valid pair is reachable from every other such node *within its
+        # component*.  But low node counts, low connection-chance, or low
+        # l_max can leave multiple disconnected components.  We add the
+        # minimum set of "bridge" edges required to merge them all.
+        bridge_pairs: list[tuple[int, int]] = []
+        if n_components > 1:
+            bridge_pairs = self._bridge_components(xy, parent, n, tree)
+            n_after = len({_find(int(i)) for i in range(n)})
+            print(f"  After bridging: {n_after:,} component(s) "
+                  f"({len(bridge_pairs):,} bridge edge(s) added).")
+
+        # Combine spanning-forest + extra + bridge edges
+        all_pairs = list(selected)
+        for bp in bridge_pairs:
+            all_pairs.append(np.array(bp, dtype=np.int64))
+
+        if not all_pairs:
+            print("  WARNING: no valid pairs could be selected.")
+            return pd.DataFrame(columns=["source", "target", "length", "weight"])
+
+        selected_final = np.array(all_pairs, dtype=np.int64)
+
         # ---- compute edge attributes ----
-        lengths = np.linalg.norm(xy[selected[:, 0]] - xy[selected[:, 1]], axis=1)
+        lengths = np.linalg.norm(
+            xy[selected_final[:, 0]] - xy[selected_final[:, 1]], axis=1
+        )
         weights = 1.0 / np.maximum(lengths, 1e-9)   # weight = 1/length
 
         df = pd.DataFrame({
-            "source": selected[:, 0].astype(np.int64),
-            "target": selected[:, 1].astype(np.int64),
+            "source": selected_final[:, 0].astype(np.int64),
+            "target": selected_final[:, 1].astype(np.int64),
             "length": lengths,
             "weight": weights,
         })
         return df
+
+    # ------------------------------------------------------------------
+    # Connectivity helper
+    # ------------------------------------------------------------------
+
+    def _bridge_components(
+        self,
+        xy: np.ndarray,
+        parent: np.ndarray,
+        n: int,
+        tree: "cKDTree",
+    ) -> list[tuple[int, int]]:
+        """Add minimum bridge edges so the graph has a single connected component.
+
+        Uses a Prim-like approach: repeatedly find the shortest valid cross-
+        component edge and add it, merging the two components.  Repeats until
+        one component remains.
+
+        Bridge edges are allowed to exceed L_MAX (they are a last resort to
+        guarantee connectivity).  Core-crossing edges are avoided if possible;
+        if no non-crossing bridge exists, a crossing edge is used rather than
+        leaving the graph disconnected.
+
+        Parameters
+        ----------
+        xy     : (N, 2) array of node positions.
+        parent : union-find parent array (modified in place as components merge).
+        n      : number of nodes.
+        tree   : cKDTree of all node positions.
+
+        Returns
+        -------
+        List of (source, target) pairs for the bridge edges.
+        """
+        def _find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        bridge_list: list[tuple[int, int]] = []
+        # How many nearest neighbours to examine per node per iteration.
+        k_search = min(50, n)
+
+        while True:
+            # Gather one representative per component.
+            rep_of: dict[int, int] = {}
+            for i in range(n):
+                r = _find(i)
+                if r not in rep_of:
+                    rep_of[r] = i
+
+            if len(rep_of) <= 1:
+                break   # single component – done
+
+            reps = list(rep_of.values())
+            rep_xy = xy[reps]
+
+            # Query k nearest neighbours for every representative.
+            dists, idxs = tree.query(rep_xy, k=k_search)
+
+            best_dist  = float("inf")
+            best_pair: tuple[int, int] | None = None
+            best_crosses = True   # prefer non-crossing edges
+
+            for ri, (row_d, row_idx) in enumerate(zip(dists, idxs)):
+                src      = reps[ri]
+                src_root = _find(src)
+                for d, tgt in zip(row_d, row_idx):
+                    tgt = int(tgt)
+                    if _find(tgt) == src_root:
+                        continue   # same component – skip
+                    crosses = bool(
+                        segments_cross_circle(
+                            xy[src : src + 1], xy[tgt : tgt + 1],
+                            self.cfg.r_core,
+                        )[0]
+                    )
+                    # Prefer non-crossing; among equal crossing status prefer shorter.
+                    if (not crosses and (best_crosses or d < best_dist)) or \
+                       (crosses and best_crosses and d < best_dist):
+                        best_dist    = d
+                        best_pair    = (src, tgt)
+                        best_crosses = crosses
+                    if best_pair and not best_crosses:
+                        break   # already have a valid non-crossing edge
+
+            if best_pair is None:
+                print("  WARNING: could not find any bridge edge; "
+                      "some components remain disconnected.")
+                break
+
+            bridge_list.append(best_pair)
+            ps = _find(best_pair[0])
+            pt = _find(best_pair[1])
+            parent[ps] = pt
+
+        return bridge_list
 
     # ------------------------------------------------------------------
     # Stage C: worldbuilding attribute assignment

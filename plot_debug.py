@@ -238,6 +238,16 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
             color="#2a3a4a", linewidth=1.0, alpha=0.6, zorder=4,
         )
 
+    # ── Hidden-node mask (reduced view / filter) ─────────────────────────
+    _hidden_set = set(getattr(args, "hidden_nodes", None) or [])
+    if _hidden_set:
+        _vis_mask = np.ones(len(nodes), dtype=bool)
+        for _hi in _hidden_set:
+            if 0 <= _hi < len(nodes):
+                _vis_mask[_hi] = False
+    else:
+        _vis_mask = None   # all visible
+
     # ── Hierarchy pre-computation ─────────────────────────────────────────
     # Resolved early so it can colour both edges and nodes in hierarchy mode.
     color_by = getattr(args, "color_by", "arm_dist")
@@ -264,31 +274,46 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
         xy  = nodes[["x", "y"]].values
         src = edges["source"].values.astype(int)
         tgt = edges["target"].values.astype(int)
+
+        # Filter out edges whose endpoints are hidden
+        if _vis_mask is not None:
+            _edge_vis = _vis_mask[src] & _vis_mask[tgt]
+            src = src[_edge_vis]
+            tgt = tgt[_edge_vis]
+
         segs = [[xy[s], xy[t]] for s, t in zip(src, tgt)]
 
-        if _h_vals is not None:
-            # Hierarchy mode: colour edges that share a hierarchy; dim the rest.
-            ec = [
-                (*_hmap.get(int(_h_vals[s]), _HIER_UNASSIGNED), 0.55)
-                if (_h_vals[s] >= 0 and int(_h_vals[s]) == int(_h_vals[t]))
-                else _HIER_CROSS_EDGE
-                for s, t in zip(src, tgt)
-            ]
-            lc = LineCollection(segs, colors=ec,
-                                linewidths=args.edge_width, zorder=5)
-        else:
-            lc = LineCollection(
-                segs,
-                colors=args.edge_color,
-                linewidths=args.edge_width,
-                alpha=args.edge_alpha,
-                zorder=5,
-            )
-        ax.add_collection(lc)
+        if segs:
+            if _h_vals is not None:
+                # Hierarchy mode: colour edges that share a hierarchy; dim the rest.
+                ec = [
+                    (*_hmap.get(int(_h_vals[s]), _HIER_UNASSIGNED), 0.55)
+                    if (_h_vals[s] >= 0 and int(_h_vals[s]) == int(_h_vals[t]))
+                    else _HIER_CROSS_EDGE
+                    for s, t in zip(src, tgt)
+                ]
+                lc = LineCollection(segs, colors=ec,
+                                    linewidths=args.edge_width, zorder=5)
+            else:
+                lc = LineCollection(
+                    segs,
+                    colors=args.edge_color,
+                    linewidths=args.edge_width,
+                    alpha=args.edge_alpha,
+                    zorder=5,
+                )
+            ax.add_collection(lc)
 
     # ── Nodes ─────────────────────────────────────────────────────────────
     x = nodes["x"].values
     y = nodes["y"].values
+
+    # Apply visibility mask for reduced view
+    if _vis_mask is not None:
+        x_plot = x[_vis_mask]
+        y_plot = y[_vis_mask]
+    else:
+        x_plot, y_plot = x, y
 
     sc     = None
     clabel = None
@@ -296,9 +321,10 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
 
     if _hier_node_rgba is not None:
         # Hierarchy mode: categorical RGBA colours, no gradient colorbar.
+        rgba_plot = _hier_node_rgba[_vis_mask] if _vis_mask is not None else _hier_node_rgba
         sc = ax.scatter(
-            x, y,
-            c=_hier_node_rgba,
+            x_plot, y_plot,
+            c=rgba_plot,
             s=args.node_size,
             linewidths=0,
             zorder=6,
@@ -316,24 +342,44 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
         _DIST_CMAP  = LinearSegmentedColormap.from_list(
             "adist", ["#ffff44", "#66aa22", "#116633", "#003322", "#000a0a"])
 
+        vmin_val: Optional[float] = None
+        vmax_val: Optional[float] = None
+
         if color_by == "arm_dist" and "arm_dist" in nodes.columns:
             c, cmap, clabel = nodes["arm_dist"].values, grad_cmap, "Arm distance"
         elif color_by == "r" and "r" in nodes.columns:
             c, cmap, clabel = nodes["r"].values, grad_cmap, "Radius"
         elif color_by == "pop" and "pop" in nodes.columns:
             c, cmap, clabel = nodes["pop"].values, _POP_CMAP, "Population"
+            # Anchor to the full semantic range so every colour level is correct
+            # regardless of whether all values 0-100 are present in this dataset.
+            vmin_val, vmax_val = 0.0, 100.0
         elif color_by == "admin_lvl" and "admin_lvl" in nodes.columns:
             c, cmap, clabel = nodes["admin_lvl"].values, _ADMIN_CMAP, "Admin level"
+            # Anchor: 0 = no admin centre (darkest), 5 = top-tier capital (brightest).
+            # Without this, matplotlib auto-normalises to whichever levels happen to
+            # exist and a level-4 node would incorrectly get the level-5 colour.
+            vmin_val, vmax_val = 0.0, 5.0
         elif color_by == "admin_dist" and "admin_dist" in nodes.columns:
             raw = nodes["admin_dist"].values.astype(float)
-            raw[raw < 0] = raw[raw >= 0].max() + 1 if (raw >= 0).any() else 0
+            valid_vals = raw[raw >= 0]
+            raw_max = float(valid_vals.max()) + 1 if len(valid_vals) > 0 else 1.0
+            raw[raw < 0] = raw_max   # map unreachable (-1) to just beyond the max
             c, cmap, clabel = raw, _DIST_CMAP, "Admin distance (hops)"
+            vmin_val, vmax_val = 0.0, raw_max
         else:
             c, cmap, clabel = args.node_color, None, None
 
+        # Apply visibility mask to the colour array
+        if _vis_mask is not None and isinstance(c, np.ndarray):
+            c_plot = c[_vis_mask]
+        else:
+            c_plot = c
+
         sc = ax.scatter(
-            x, y,
-            c=c, cmap=cmap,
+            x_plot, y_plot,
+            c=c_plot, cmap=cmap,
+            vmin=vmin_val, vmax=vmax_val,
             s=args.node_size,
             alpha=0.75,
             linewidths=0,
@@ -368,10 +414,16 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
 
     # ── Decorations ───────────────────────────────────────────────────────
     no_edges = getattr(args, "no_edges", False)
+    n_visible = int(_vis_mask.sum()) if _vis_mask is not None else len(nodes)
+    _filter_note = (
+        f"  [{n_visible:,} of {len(nodes):,} shown]"
+        if _vis_mask is not None else ""
+    )
     title = (
         f"Emperum Galaxy  —  "
         f"{len(nodes):,} systems  |  {len(edges):,} L-ways"
         + ("  (edges hidden)" if no_edges else "")
+        + _filter_note
     )
     ax.set_title(title, color="white", fontsize=11, pad=10)
 
