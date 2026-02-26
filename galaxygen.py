@@ -691,6 +691,62 @@ class GalaxyGenerator:
         print(f"  Connected components among eligible nodes: {n_components:,} "
               f"(spanning forest used {n_span:,} edges)")
 
+        # ---- ensure connectivity ----
+        # After random selection, connected nodes may form multiple isolated
+        # islands.  We add the minimum-length bridge edges (drawn from the
+        # valid-pairs pool) needed to merge every component into one, using a
+        # Kruskal-style scan over length-sorted valid pairs.
+        if len(selected) > 0:
+            _par: list = list(range(n))
+
+            def _find(x: int) -> int:
+                root = x
+                while _par[root] != root:
+                    root = _par[root]
+                while _par[x] != root:          # path compression
+                    _par[x], x = root, _par[x]
+                return root
+
+            def _union(a: int, b: int) -> bool:
+                ra, rb = _find(a), _find(b)
+                if ra == rb:
+                    return False
+                _par[ra] = rb
+                return True
+
+            for _s, _t in selected:
+                _union(int(_s), int(_t))
+
+            _touched = set(int(v) for v in selected.reshape(-1))
+            _n_comp = len({_find(i) for i in _touched})
+
+            if _n_comp > 1:
+                # Build set of already-selected pairs for O(1) skip.
+                _sel_set = {(min(int(_s), int(_t)), max(int(_s), int(_t)))
+                            for _s, _t in selected}
+                # Sort all valid pairs by Euclidean length (ascending).
+                _all_lens = np.linalg.norm(
+                    xy[valid_pairs[:, 0]] - xy[valid_pairs[:, 1]], axis=1)
+                _order = np.argsort(_all_lens)
+                _bridges: list = []
+                for _idx in _order:
+                    _s = int(valid_pairs[_idx, 0])
+                    _t = int(valid_pairs[_idx, 1])
+                    _key = (min(_s, _t), max(_s, _t))
+                    if _key in _sel_set:
+                        continue
+                    if _union(_s, _t):
+                        _bridges.append([_s, _t])
+                        _sel_set.add(_key)
+                        _n_comp -= 1
+                        if _n_comp <= 1:
+                            break
+                if _bridges:
+                    _bridge_arr = np.array(_bridges, dtype=np.int64)
+                    selected = np.concatenate([selected, _bridge_arr], axis=0)
+                    print(f"  Added {len(_bridges):,} bridge edge(s) to merge "
+                          f"isolated network islands.")
+
         # ---- compute edge attributes ----
         lengths = np.linalg.norm(xy[selected[:, 0]] - xy[selected[:, 1]], axis=1)
         weights = 1.0 / np.maximum(lengths, 1e-9)   # weight = 1/length

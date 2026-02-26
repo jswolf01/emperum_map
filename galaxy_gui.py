@@ -290,6 +290,20 @@ class GalaxyGUI:
         self.v_search_query   = sv(value="")
         self.v_search_result  = sv(value="")
 
+        # ── Reduced-view filter ───────────────────────────────────────────
+        self.v_filter_active = bv(value=False)
+        self.v_filter_logic  = sv(value="AND")
+        self.v_filter_mode   = sv(value="show_matching")
+        self._filter_conds: list[dict] = [
+            {
+                "enabled": bv(value=False),
+                "attr":    sv(value=""),
+                "op":      sv(value="="),
+                "val":     sv(value=""),
+            }
+            for _ in range(3)
+        ]
+
     # ── UI construction ───────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
@@ -318,66 +332,72 @@ class GalaxyGUI:
 
     # ── Left parameter panel ──────────────────────────────────────────────
 
-    def _build_param_panel(self, parent: ttk.Frame) -> None:
-        """Scrollable left panel with collapsible generation / appearance sections."""
-        scroll_canvas = tk.Canvas(parent, highlightthickness=0, borderwidth=0)
-        vscroll = ttk.Scrollbar(parent, orient="vertical",
-                                command=scroll_canvas.yview)
-        scroll_canvas.configure(yscrollcommand=vscroll.set)
+    @staticmethod
+    def _make_scrollable_tab(tab_frame: ttk.Frame):
+        """Create a scrollable canvas inside a tab frame; return the inner content Frame."""
+        canvas = tk.Canvas(tab_frame, highlightthickness=0, borderwidth=0)
+        vscroll = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vscroll.set)
         vscroll.pack(side="right", fill="y")
-        scroll_canvas.pack(side="left", fill="both", expand=True)
+        canvas.pack(side="left", fill="both", expand=True)
 
-        inner = ttk.Frame(scroll_canvas)
-        win_id = scroll_canvas.create_window((0, 0), window=inner, anchor="nw")
-
+        inner = ttk.Frame(canvas)
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
         inner.bind("<Configure>",
-                   lambda _e: scroll_canvas.configure(
-                       scrollregion=scroll_canvas.bbox("all")))
-        scroll_canvas.bind("<Configure>",
-                           lambda e: scroll_canvas.itemconfigure(win_id, width=e.width))
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfigure(win_id, width=e.width))
+        canvas.bind("<MouseWheel>",
+                    lambda e: canvas.yview_scroll(int(-1 * e.delta / 120), "units"))
+        canvas.bind("<Button-4>", lambda _e: canvas.yview_scroll(-1, "units"))
+        canvas.bind("<Button-5>", lambda _e: canvas.yview_scroll(1, "units"))
+        return inner
 
-        def _wheel_left(evt):
-            if evt.delta:
-                scroll_canvas.yview_scroll(int(-1 * evt.delta / 120), "units")
-        scroll_canvas.bind("<MouseWheel>", _wheel_left)
-        scroll_canvas.bind("<Button-4>", lambda _e: scroll_canvas.yview_scroll(-1, "units"))
-        scroll_canvas.bind("<Button-5>", lambda _e: scroll_canvas.yview_scroll(1, "units"))
+    def _build_param_panel(self, parent: ttk.Frame) -> None:
+        """Left panel — two tabs: Generation parameters and Appearance settings."""
+        nb = ttk.Notebook(parent)
+        nb.pack(fill="both", expand=True)
+
+        gen_tab = ttk.Frame(nb)
+        nb.add(gen_tab, text="Generation")
+        app_tab = ttk.Frame(nb)
+        nb.add(app_tab, text="Appearance")
+
+        gen  = self._make_scrollable_tab(gen_tab)
+        app  = self._make_scrollable_tab(app_tab)
 
         LW = 24
 
-        # ── Spatial ───────────────────────────────────────────────────
-        sec = Section(inner, "Spatial")
+        # ── Generation tab ────────────────────────────────────────────
+
+        sec = Section(gen, "Spatial")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         SliderEntry(s, "Star systems (n_nodes)",  self.v_n_nodes, 100, 20_000, 100, label_width=LW).pack(fill="x")
         SliderEntry(s, "Disk radius (r_disk)",    self.v_r_disk,  10.0, 500.0, 1.0, label_width=LW).pack(fill="x")
         SliderEntry(s, "Core radius (r_core)",    self.v_r_core,  0.0, 100.0, 0.5, label_width=LW).pack(fill="x")
 
-        # ── Edges ─────────────────────────────────────────────────────
-        sec = Section(inner, "Edges (Hyperspace Lanes)")
+        sec = Section(gen, "Edges (Hyperspace Lanes)")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
-        SliderEntry(s, "Max lane length (l_max)",  self.v_l_max,                  1.0, 50.0, 0.5, label_width=LW).pack(fill="x")
-        SliderEntry(s, "Avg degree (target_degree)", self.v_target_degree,         1.0, 20.0, 0.5, label_width=LW).pack(fill="x")
-        SliderEntry(s, "Connection chance",          self.v_node_connection_chance, 0.0, 1.0, 0.05, label_width=LW).pack(fill="x")
+        SliderEntry(s, "Max lane length (l_max)",    self.v_l_max,                  1.0, 50.0, 0.5,  label_width=LW).pack(fill="x")
+        SliderEntry(s, "Avg degree (target_degree)", self.v_target_degree,           1.0, 20.0, 0.5,  label_width=LW).pack(fill="x")
+        SliderEntry(s, "Connection chance",          self.v_node_connection_chance,  0.0,  1.0, 0.05, label_width=LW).pack(fill="x")
 
-        # ── Spiral Arms ───────────────────────────────────────────────
-        sec = Section(inner, "Spiral Arms")
+        sec = Section(gen, "Spiral Arms")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
-        SliderEntry(s, "Number of arms (n_arms)",    self.v_n_arms,    1, 8,    1,    label_width=LW).pack(fill="x")
-        SliderEntry(s, "Arm tightness (arm_b)",      self.v_arm_b,     0.01, 2.0, 0.01, label_width=LW).pack(fill="x")
-        SliderEntry(s, "Arm width σ (arm_sigma)",    self.v_arm_sigma, 0.5, 30.0, 0.5, label_width=LW).pack(fill="x")
-        SliderEntry(s, "Inter-arm density (arm_base)",self.v_arm_base, 0.0, 1.0,  0.01, label_width=LW).pack(fill="x")
+        SliderEntry(s, "Number of arms (n_arms)",     self.v_n_arms,    1,    8,    1,    label_width=LW).pack(fill="x")
+        SliderEntry(s, "Arm tightness (arm_b)",       self.v_arm_b,     0.01, 2.0,  0.01, label_width=LW).pack(fill="x")
+        SliderEntry(s, "Arm width σ (arm_sigma)",     self.v_arm_sigma, 0.5,  30.0, 0.5,  label_width=LW).pack(fill="x")
+        SliderEntry(s, "Inter-arm density (arm_base)", self.v_arm_base, 0.0,   1.0, 0.01, label_width=LW).pack(fill="x")
 
-        # ── Radial Density ────────────────────────────────────────────
-        sec = Section(inner, "Radial Density")
+        sec = Section(gen, "Radial Density")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         SliderEntry(s, "Scale length (r_scale)", self.v_r_scale, 5.0, 200.0, 1.0, label_width=LW).pack(fill="x")
 
-        # ── Sampling & Seed ───────────────────────────────────────────
-        sec = Section(inner, "Sampling & Reproducibility")
+        sec = Section(gen, "Sampling & Reproducibility")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         SliderEntry(s, "Boost multiplier (boost)", self.v_boost, 1.0, 20.0, 0.5, label_width=LW).pack(fill="x")
@@ -387,8 +407,7 @@ class GalaxyGUI:
         ttk.Spinbox(row, from_=0, to=99_999, increment=1,
                     textvariable=self.v_seed, width=8).pack(side="left")
 
-        # ── Output ────────────────────────────────────────────────────
-        sec = Section(inner, "Output")
+        sec = Section(gen, "Output")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         row = ttk.Frame(s)
@@ -401,13 +420,14 @@ class GalaxyGUI:
         ttk.Checkbutton(row2, text="Export GEXF (requires networkx)",
                         variable=self.v_write_gexf).pack(side="left", padx=(4, 2))
 
-        # ── Node Appearance ───────────────────────────────────────────
-        sec = Section(inner, "Node Appearance")
+        # ── Appearance tab ────────────────────────────────────────────
+
+        sec = Section(app, "Node Appearance")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         row = ttk.Frame(s)
         row.pack(fill="x", pady=1)
-        ttk.Label(row, text="Colour by", width=LW, anchor="w").pack(side="left", padx=(4, 2))
+        ttk.Label(row, text="Color by", width=LW, anchor="w").pack(side="left", padx=(4, 2))
         ttk.Combobox(
             row, textvariable=self.v_color_by,
             values=["arm_dist", "r", "pop", "admin_lvl", "admin_dist",
@@ -415,90 +435,80 @@ class GalaxyGUI:
             state="readonly", width=11,
         ).pack(side="left")
         SliderEntry(s, "Node size", self.v_node_size, 0.1, 20.0, 0.1, label_width=LW).pack(fill="x")
-        ColorEntry(s,  "Flat colour  (mode: none)", self.v_node_color, label_width=LW).pack(fill="x")
-        ColorEntry(s,  "Gradient low  (near arm)",  self.v_grad_low,   label_width=LW).pack(fill="x")
-        ColorEntry(s,  "Gradient high  (inter-arm)", self.v_grad_high,  label_width=LW).pack(fill="x")
+        ColorEntry(s, "Flat color  (mode: none)", self.v_node_color, label_width=LW).pack(fill="x")
+        ColorEntry(s, "Gradient low",             self.v_grad_low,   label_width=LW).pack(fill="x")
+        ColorEntry(s, "Gradient high",            self.v_grad_high,  label_width=LW).pack(fill="x")
+        ttk.Label(s, text="  Gradient low→high maps to low→high data values for all\n"
+                           "  gradient color modes (arm_dist, r, pop, admin_lvl, admin_dist).",
+                  foreground="#888888", wraplength=320).pack(anchor="w", padx=6)
 
-        # ── Edge Appearance ───────────────────────────────────────────
-        sec = Section(inner, "Edge Appearance")
+        sec = Section(app, "Edge Appearance")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         ttk.Checkbutton(s, text="Hide edges  (much faster for N > 1 000)",
                         variable=self.v_no_edges).pack(anchor="w", padx=4, pady=2)
-        ColorEntry(s, "Edge colour", self.v_edge_color, label_width=LW).pack(fill="x")
-        SliderEntry(s, "Edge width",   self.v_edge_width, 0.1, 5.0, 0.1, label_width=LW).pack(fill="x")
+        ColorEntry(s, "Edge color",    self.v_edge_color, label_width=LW).pack(fill="x")
+        SliderEntry(s, "Edge width",   self.v_edge_width, 0.1, 5.0, 0.1,  label_width=LW).pack(fill="x")
         SliderEntry(s, "Edge opacity", self.v_edge_alpha, 0.0, 1.0, 0.05, label_width=LW).pack(fill="x")
 
     # ── Right attribute panel ──────────────────────────────────────────────
 
     def _build_attr_panel(self, parent: ttk.Frame) -> None:
-        """Scrollable right panel: population, admin, inspector, search."""
-        scroll_canvas = tk.Canvas(parent, highlightthickness=0, borderwidth=0)
-        vscroll = ttk.Scrollbar(parent, orient="vertical",
-                                command=scroll_canvas.yview)
-        scroll_canvas.configure(yscrollcommand=vscroll.set)
-        vscroll.pack(side="right", fill="y")
-        scroll_canvas.pack(side="left", fill="both", expand=True)
+        """Right panel — four tabs: Attributes, Inspector, Search, Filter."""
+        nb = ttk.Notebook(parent)
+        nb.pack(fill="both", expand=True)
 
-        inner = ttk.Frame(scroll_canvas)
-        win_id = scroll_canvas.create_window((0, 0), window=inner, anchor="nw")
+        attr_tab   = ttk.Frame(nb)
+        insp_tab   = ttk.Frame(nb)
+        search_tab = ttk.Frame(nb)
+        filt_tab   = ttk.Frame(nb)
+        nb.add(attr_tab,   text="Attributes")
+        nb.add(insp_tab,   text="Inspector")
+        nb.add(search_tab, text="Search")
+        nb.add(filt_tab,   text="Filter")
 
-        inner.bind("<Configure>",
-                   lambda _e: scroll_canvas.configure(
-                       scrollregion=scroll_canvas.bbox("all")))
-        scroll_canvas.bind("<Configure>",
-                           lambda e: scroll_canvas.itemconfigure(win_id, width=e.width))
+        attr_inner = self._make_scrollable_tab(attr_tab)
 
         RLW = 22   # label width for right panel
 
-        # ── Apply Attributes button ────────────────────────────────────
-        ttk.Button(inner, text="Apply Attributes",
+        # ── Attributes tab ────────────────────────────────────────────
+
+        ttk.Button(attr_inner, text="Apply Attributes",
                    command=self._on_apply_attrs).pack(fill="x", padx=6, pady=(6, 2))
-        ttk.Label(inner,
-                  text="(Re-assigns pop/admin without regenerating spatial layout)",
+        ttk.Label(attr_inner,
+                  text="Re-assigns pop/admin without regenerating spatial layout.",
                   foreground="#888888", wraplength=330,
                   justify="left").pack(padx=6, pady=(0, 4))
 
-        # ── Population ────────────────────────────────────────────────
-        sec = Section(inner, "Population")
+        sec = Section(attr_inner, "Population")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
-
         ttk.Label(s, text=(
             "pop=0 for isolated nodes.  Connected nodes follow a bell curve "
             "modified by galactic position and neighbourhood clustering."
-        ), wraplength=320, justify="left", foreground="#aaaaaa").pack(
-            padx=4, pady=(2, 6))
-
+        ), wraplength=320, justify="left", foreground="#aaaaaa").pack(padx=4, pady=(2, 6))
         SliderEntry(s, "Core dispersal", self.v_pop_core_dispersal,
                     0.0, 5.0, 0.1, label_width=RLW).pack(fill="x")
         ttk.Label(s, text="  0=uniform  |  1=moderate core-high  |  5=extreme core bias",
                   foreground="#888888").pack(anchor="w", padx=6)
-
         SliderEntry(s, "Clustering", self.v_pop_dispersal,
                     0.0, 5.0, 0.1, label_width=RLW).pack(fill="x")
         ttk.Label(s, text="  0=no clustering  |  1=moderate  |  5=strong neighbourhood",
                   foreground="#888888").pack(anchor="w", padx=6)
 
-        # ── Admin Levels ──────────────────────────────────────────────
-        sec = Section(inner, "Admin Levels")
+        sec = Section(attr_inner, "Admin Levels")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
-
         ttk.Label(s, text=(
             "Lvl 1 = top-tier capital  |  Lvl 5 = regional logistics centre.  "
             "Nodes selected by high pop + high connectivity.  "
             "Set counts to -1 to use ratios."
-        ), wraplength=320, justify="left", foreground="#aaaaaa").pack(
-            padx=4, pady=(2, 6))
+        ), wraplength=320, justify="left", foreground="#aaaaaa").pack(padx=4, pady=(2, 6))
 
         ttk.Label(s, text="── Exact counts  (−1 = use ratios) ──",
                   foreground="#cccccc").pack(anchor="w", padx=4, pady=(4, 0))
-
-        for lvl, var in [(1, self.v_admin_count_1),
-                         (2, self.v_admin_count_2),
-                         (3, self.v_admin_count_3),
-                         (4, self.v_admin_count_4),
+        for lvl, var in [(1, self.v_admin_count_1), (2, self.v_admin_count_2),
+                         (3, self.v_admin_count_3), (4, self.v_admin_count_4),
                          (5, self.v_admin_count_5)]:
             row = ttk.Frame(s)
             row.pack(fill="x", pady=1)
@@ -509,7 +519,6 @@ class GalaxyGUI:
 
         ttk.Label(s, text="── Ratios  (higher ÷ lower level) ──",
                   foreground="#cccccc").pack(anchor="w", padx=4, pady=(8, 0))
-
         for label, var in [("Lvl 2 : Lvl 1 ratio", self.v_admin_ratio_21),
                             ("Lvl 3 : Lvl 2 ratio", self.v_admin_ratio_32),
                             ("Lvl 4 : Lvl 3 ratio", self.v_admin_ratio_43),
@@ -518,14 +527,12 @@ class GalaxyGUI:
 
         ttk.Label(s, text="── Spatial spacing ──",
                   foreground="#cccccc").pack(anchor="w", padx=4, pady=(8, 0))
-
         SliderEntry(s, "Coverage scale", self.v_admin_coverage_scale,
                     0.1, 5.0, 0.1, label_width=RLW).pack(fill="x")
         ttk.Label(s, text=(
             "  Scales the auto-computed coverage radius for each level.\n"
             "  Lower = denser centres; higher = sparser, larger regions."
         ), foreground="#888888", wraplength=320).pack(anchor="w", padx=6)
-
         SliderEntry(s, "Separation scale", self.v_admin_sep_scale,
                     0.5, 5.0, 0.1, label_width=RLW).pack(fill="x")
         ttk.Label(s, text=(
@@ -533,11 +540,10 @@ class GalaxyGUI:
             "  Lower = centres can cluster; higher = forced wide spread."
         ), foreground="#888888", wraplength=320).pack(anchor="w", padx=6)
 
-        # ── Node Inspector ────────────────────────────────────────────
-        sec = Section(inner, "Node Inspector", start_open=True)
-        sec.pack(fill="x", padx=4, pady=3)
-        self._inspector_section = sec
-        s = sec.inner
+        # ── Inspector tab ─────────────────────────────────────────────
+
+        s = ttk.Frame(insp_tab, padding=(4, 4))
+        s.pack(fill="both", expand=True)
 
         ttk.Label(s, text="Click a node on the preview to inspect it.",
                   foreground="#888888", wraplength=320).pack(padx=4, pady=(2, 4))
@@ -551,7 +557,6 @@ class GalaxyGUI:
             w.pack(side="left")
             return w
 
-        # Read-only fields
         _insp_row(s, "System ID (uid)",
                   lambda p: ttk.Entry(p, textvariable=self.v_insp_uid,
                                       state="readonly", width=12))
@@ -561,8 +566,6 @@ class GalaxyGUI:
         _insp_row(s, "Hierarchy index",
                   lambda p: ttk.Entry(p, textvariable=self.v_insp_hierarchy,
                                       state="readonly", width=8))
-
-        # Editable fields
         _insp_row(s, "Name",
                   lambda p: ttk.Entry(p, textvariable=self.v_insp_name, width=18))
         _insp_row(s, "Population (0-100)",
@@ -581,10 +584,10 @@ class GalaxyGUI:
         ttk.Button(btn_row, text="Deselect",
                    command=self._deselect_node).pack(side="left", padx=4)
 
-        # ── Search ────────────────────────────────────────────────────
-        sec = Section(inner, "Search")
-        sec.pack(fill="x", padx=4, pady=3)
-        s = sec.inner
+        # ── Search tab ────────────────────────────────────────────────
+
+        s = ttk.Frame(search_tab, padding=(4, 4))
+        s.pack(fill="both", expand=True)
 
         row = ttk.Frame(s)
         row.pack(fill="x", pady=2)
@@ -620,10 +623,66 @@ class GalaxyGUI:
             side="left", padx=4)
         ttk.Button(btn_row, text="Clear Search", command=self._on_clear_search).pack(
             side="left", padx=4)
-
         ttk.Label(s, textvariable=self.v_search_result,
-                  foreground="#88cc88", wraplength=320).pack(
-            anchor="w", padx=4, pady=2)
+                  foreground="#88cc88", wraplength=320).pack(anchor="w", padx=4, pady=2)
+
+        # ── Filter tab (reduced view) ─────────────────────────────────
+
+        s = ttk.Frame(filt_tab, padding=(4, 6))
+        s.pack(fill="both", expand=True)
+
+        ttk.Checkbutton(s, text="Enable reduced view filter",
+                        variable=self.v_filter_active).pack(anchor="w", padx=4, pady=(4, 2))
+        ttk.Label(s,
+                  text="When active, applies the conditions below to show or hide nodes "
+                       "(and their connected edges).",
+                  foreground="#aaaaaa", wraplength=310, justify="left").pack(
+            anchor="w", padx=8, pady=(0, 8))
+
+        _FILT_ATTRS = ["", "pop", "admin_lvl", "admin_dist", "hierarchy",
+                       "arm_dist", "r", "name", "uid"]
+        _FILT_OPS   = ["=", ">", "<", ">=", "<=", "contains"]
+
+        ttk.Label(s, text="Conditions (check box to enable each row):",
+                  foreground="#cccccc").pack(anchor="w", padx=4, pady=(2, 2))
+
+        for i, cond in enumerate(self._filter_conds):
+            row = ttk.Frame(s)
+            row.pack(fill="x", pady=2, padx=4)
+            ttk.Checkbutton(row, variable=cond["enabled"]).pack(side="left")
+            ttk.Combobox(row, textvariable=cond["attr"],
+                         values=_FILT_ATTRS, state="readonly", width=10).pack(
+                side="left", padx=(2, 1))
+            ttk.Combobox(row, textvariable=cond["op"],
+                         values=_FILT_OPS, state="readonly", width=7).pack(
+                side="left", padx=1)
+            ttk.Entry(row, textvariable=cond["val"], width=8).pack(
+                side="left", padx=(1, 0))
+
+        logic_row = ttk.Frame(s)
+        logic_row.pack(fill="x", pady=(8, 2), padx=4)
+        ttk.Label(logic_row, text="Logic between conditions:").pack(
+            side="left", padx=(0, 6))
+        ttk.Radiobutton(logic_row, text="AND",
+                        variable=self.v_filter_logic, value="AND").pack(side="left")
+        ttk.Radiobutton(logic_row, text="OR",
+                        variable=self.v_filter_logic, value="OR").pack(side="left", padx=4)
+
+        mode_row = ttk.Frame(s)
+        mode_row.pack(fill="x", pady=2, padx=4)
+        ttk.Label(mode_row, text="Mode:").pack(side="left", padx=(0, 6))
+        ttk.Radiobutton(mode_row, text="Show only matching",
+                        variable=self.v_filter_mode, value="show_matching").pack(side="left")
+        ttk.Radiobutton(mode_row, text="Hide matching",
+                        variable=self.v_filter_mode, value="hide_matching").pack(
+            side="left", padx=4)
+
+        ttk.Button(s, text="Apply Filter  (re-render)",
+                   command=self._on_apply_filter).pack(anchor="w", padx=4, pady=(10, 2))
+        ttk.Label(s,
+                  text="Tip: Preview also re-applies the active filter automatically.",
+                  foreground="#888888", wraplength=310, justify="left").pack(
+            anchor="w", padx=8)
 
     # ── Preview panel (centre) ─────────────────────────────────────────────
 
@@ -738,8 +797,76 @@ class GalaxyGUI:
             r_arm_start         = 3.0,
             selected_nodes      = selected or [],
             found_nodes         = found or [],
+            node_mask           = self._compute_node_mask(),
         )
         return ns
+
+    def _compute_node_mask(self) -> Optional[np.ndarray]:
+        """Return a boolean visibility array from the active filter conditions.
+
+        Returns None when the filter is inactive or has no valid conditions
+        (meaning all nodes are visible).  Returns a bool ndarray of length
+        n_nodes otherwise.
+        """
+        if not self.v_filter_active.get():
+            return None
+        if self._nodes_df is None:
+            return None
+
+        conditions: list[np.ndarray] = []
+        for cond in self._filter_conds:
+            if not cond["enabled"].get():
+                continue
+            attr = cond["attr"].get()
+            op   = cond["op"].get()
+            val  = cond["val"].get().strip()
+            if not attr or not val or attr not in self._nodes_df.columns:
+                continue
+            col = self._nodes_df[attr]
+            try:
+                if op == "contains":
+                    mask = col.astype(str).str.contains(val, case=False, na=False).values
+                elif op == "=":
+                    try:
+                        mask = (col == float(val)).values
+                    except ValueError:
+                        mask = (col.astype(str) == val).values
+                elif op == ">":
+                    mask = (col.astype(float) > float(val)).values
+                elif op == "<":
+                    mask = (col.astype(float) < float(val)).values
+                elif op == ">=":
+                    mask = (col.astype(float) >= float(val)).values
+                elif op == "<=":
+                    mask = (col.astype(float) <= float(val)).values
+                else:
+                    continue
+                conditions.append(mask)
+            except Exception:
+                continue
+
+        if not conditions:
+            return None
+
+        combined = conditions[0].copy()
+        logic = self.v_filter_logic.get()
+        for cond_mask in conditions[1:]:
+            if logic == "AND":
+                combined = combined & cond_mask
+            else:
+                combined = combined | cond_mask
+
+        if self.v_filter_mode.get() == "hide_matching":
+            combined = ~combined
+
+        return combined
+
+    def _on_apply_filter(self) -> None:
+        """Re-render the preview with the current filter applied."""
+        if not self._is_busy() and self._canvas_widget is not None:
+            self._set_busy(True)
+            self._worker = threading.Thread(target=self._preview_worker, daemon=True)
+            self._worker.start()
 
     def _set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
