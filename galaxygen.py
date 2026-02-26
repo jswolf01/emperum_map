@@ -537,15 +537,50 @@ class GalaxyGenerator:
                 print("  WARNING: no valid pairs after eligibility filter.")
                 return pd.DataFrame(columns=["source", "target", "length", "weight"])
 
-        # ---- shuffle and select ----
+        # ---- shuffle then spanning-forest-first selection ----
+        # Shuffling first preserves randomness.  Then a union-find spanning
+        # forest ensures all nodes that have at least one valid pair end up in
+        # a single connected component (no isolated islands).  Extra edges fill
+        # up to target_edges after the spanning forest is built.
+        perm     = self._rng.permutation(len(valid_pairs))
+        shuffled = valid_pairs[perm]
+
+        parent = np.arange(n, dtype=np.int64)
+
+        def _find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]   # path halving
+                x = parent[x]
+            return x
+
+        span_idx: list[int] = []
+        extra_idx: list[int] = []
+        for i in range(len(shuffled)):
+            s, t = int(shuffled[i, 0]), int(shuffled[i, 1])
+            ps, pt = _find(s), _find(t)
+            if ps != pt:
+                parent[ps] = pt
+                span_idx.append(i)
+            else:
+                extra_idx.append(i)
+
+        n_span   = len(span_idx)
+        n_extra  = max(0, target_edges - n_span)
+        all_idx  = span_idx + extra_idx[:n_extra]
+
+        if not all_idx:
+            print("  WARNING: no valid pairs could be selected.")
+            return pd.DataFrame(columns=["source", "target", "length", "weight"])
+
         if len(valid_pairs) < target_edges:
             print(f"  WARNING: only {len(valid_pairs):,} valid pairs available; "
                   f"target was {target_edges:,}.  "
                   "Try increasing --l_max or --target_degree.")
-            selected = valid_pairs
-        else:
-            perm     = self._rng.permutation(len(valid_pairs))
-            selected = valid_pairs[perm[:target_edges]]
+
+        selected = shuffled[np.array(all_idx, dtype=np.int64)]
+        n_components = len({_find(int(i)) for i in range(n)})
+        print(f"  Connected components among eligible nodes: {n_components:,} "
+              f"(spanning forest used {n_span:,} edges)")
 
         # ---- compute edge attributes ----
         lengths = np.linalg.norm(xy[selected[:, 0]] - xy[selected[:, 1]], axis=1)
@@ -651,23 +686,28 @@ class GalaxyGenerator:
         if all(c >= 0 for c in explicit):
             n1, n2, n3, n4, n5 = explicit
         else:
-            # Ratio-based calculation targeting ~5% of connected nodes
+            # Ratio-based calculation targeting ~5% of connected nodes.
+            # Overrides are applied in cascade order: n1 override happens before
+            # n2 is computed from n1, so n2=ratio uses the effective n1 value.
             target_total = max(1, int(n_connected * 0.05))
             r21, r32, r43, r54 = (cfg.admin_ratio_21, cfg.admin_ratio_32,
                                    cfg.admin_ratio_43, cfg.admin_ratio_54)
             multiplier = 1.0 + r21 + r21*r32 + r21*r32*r43 + r21*r32*r43*r54
             n1 = max(1, int(round(target_total / multiplier)))
+            if cfg.admin_count_1 >= 0:
+                n1 = cfg.admin_count_1
             n2 = max(1, int(round(n1 * r21)))
+            if cfg.admin_count_2 >= 0:
+                n2 = cfg.admin_count_2
             n3 = max(1, int(round(n2 * r32)))
+            if cfg.admin_count_3 >= 0:
+                n3 = cfg.admin_count_3
             n4 = max(1, int(round(n3 * r43)))
+            if cfg.admin_count_4 >= 0:
+                n4 = cfg.admin_count_4
             n5 = max(1, int(round(n4 * r54)))
-
-            # Apply any individual overrides
-            if cfg.admin_count_1 >= 0: n1 = cfg.admin_count_1
-            if cfg.admin_count_2 >= 0: n2 = cfg.admin_count_2
-            if cfg.admin_count_3 >= 0: n3 = cfg.admin_count_3
-            if cfg.admin_count_4 >= 0: n4 = cfg.admin_count_4
-            if cfg.admin_count_5 >= 0: n5 = cfg.admin_count_5
+            if cfg.admin_count_5 >= 0:
+                n5 = cfg.admin_count_5
 
         # Cap total at available connected nodes
         total = n1 + n2 + n3 + n4 + n5
