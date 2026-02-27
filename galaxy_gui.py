@@ -357,6 +357,16 @@ class GalaxyGUI:
 
         inner = ttk.Frame(canvas)
         win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfigure(win_id, width=e.width))
+        canvas.bind("<MouseWheel>",
+                    lambda e: canvas.yview_scroll(int(-1 * e.delta / 120), "units"))
+        canvas.bind("<Button-4>", lambda _e: canvas.yview_scroll(-1, "units"))
+        canvas.bind("<Button-5>", lambda _e: canvas.yview_scroll(1, "units"))
+        return inner
+
     @staticmethod
     def _make_scrollable_tab(tab_frame: ttk.Frame):
         """Create a scrollable canvas inside a tab frame; return the inner content Frame."""
@@ -385,21 +395,6 @@ class GalaxyGUI:
     # ── Left parameter panel ──────────────────────────────────────────────
 
     def _build_param_panel(self, parent: ttk.Frame) -> None:
-        """Tabbed left panel: Generation | Appearance."""
-        nb = ttk.Notebook(parent)
-        nb.pack(fill="both", expand=True)
-
-        gen_frame = ttk.Frame(nb)
-        app_frame = ttk.Frame(nb)
-        nb.add(gen_frame, text="Generation")
-        nb.add(app_frame, text="Appearance")
-        canvas.bind("<MouseWheel>",
-                    lambda e: canvas.yview_scroll(int(-1 * e.delta / 120), "units"))
-        canvas.bind("<Button-4>", lambda _e: canvas.yview_scroll(-1, "units"))
-        canvas.bind("<Button-5>", lambda _e: canvas.yview_scroll(1, "units"))
-        return inner
-
-    def _build_param_panel(self, parent: ttk.Frame) -> None:
         """Left panel — two tabs: Generation parameters and Appearance settings."""
         nb = ttk.Notebook(parent)
         nb.pack(fill="both", expand=True)
@@ -409,11 +404,8 @@ class GalaxyGUI:
         app_tab = ttk.Frame(nb)
         nb.add(app_tab, text="Appearance")
 
-        gen  = self._make_scrollable_tab(gen_tab)
-        app  = self._make_scrollable_tab(app_tab)
-
-        self._build_generation_tab(gen_frame)
-        self._build_appearance_tab(app_frame)
+        self._build_generation_tab(gen_tab)
+        self._build_appearance_tab(app_tab)
 
     def _build_generation_tab(self, parent: ttk.Frame) -> None:
         """Generation parameters: spatial, edges, arms, density, sampling."""
@@ -422,21 +414,21 @@ class GalaxyGUI:
 
         # ── Generation tab ────────────────────────────────────────────
 
-        sec = Section(gen, "Spatial")
+        sec = Section(inner, "Spatial")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         SliderEntry(s, "Star systems (n_nodes)",  self.v_n_nodes, 100, 20_000, 100, label_width=LW).pack(fill="x")
         SliderEntry(s, "Disk radius (r_disk)",    self.v_r_disk,  10.0, 500.0, 1.0, label_width=LW).pack(fill="x")
         SliderEntry(s, "Core radius (r_core)",    self.v_r_core,  0.0, 100.0, 0.5, label_width=LW).pack(fill="x")
 
-        sec = Section(gen, "Edges (Hyperspace Lanes)")
+        sec = Section(inner, "Edges (Hyperspace Lanes)")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         SliderEntry(s, "Max lane length (l_max)",    self.v_l_max,                  1.0, 50.0, 0.5,  label_width=LW).pack(fill="x")
         SliderEntry(s, "Avg degree (target_degree)", self.v_target_degree,           1.0, 20.0, 0.5,  label_width=LW).pack(fill="x")
         SliderEntry(s, "Connection chance",          self.v_node_connection_chance,  0.0,  1.0, 0.05, label_width=LW).pack(fill="x")
 
-        sec = Section(gen, "Spiral Arms")
+        sec = Section(inner, "Spiral Arms")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         SliderEntry(s, "Number of arms (n_arms)",     self.v_n_arms,    1,    8,    1,    label_width=LW).pack(fill="x")
@@ -444,14 +436,13 @@ class GalaxyGUI:
         SliderEntry(s, "Arm width σ (arm_sigma)",     self.v_arm_sigma, 0.5,  30.0, 0.5,  label_width=LW).pack(fill="x")
         SliderEntry(s, "Inter-arm density (arm_base)", self.v_arm_base, 0.0,   1.0, 0.01, label_width=LW).pack(fill="x")
 
-        sec = Section(gen, "Radial Density")
+        sec = Section(inner, "Radial Density")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         SliderEntry(s, "Scale length (r_scale)", self.v_r_scale, 5.0, 200.0, 1.0, label_width=LW).pack(fill="x")
 
         # ── Sampling & Seed ───────────────────────────────────────────
-        sec = Section(inner, "Sampling & Seed")
-        sec = Section(gen, "Sampling & Reproducibility")
+        sec = Section(inner, "Sampling & Reproducibility")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         SliderEntry(s, "Boost multiplier (boost)", self.v_boost, 1.0, 20.0, 0.5, label_width=LW).pack(fill="x")
@@ -468,7 +459,6 @@ class GalaxyGUI:
 
         # ── Output ────────────────────────────────────────────────────
         sec = Section(inner, "Output")
-        sec = Section(gen, "Output")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         row = ttk.Frame(s)
@@ -483,7 +473,7 @@ class GalaxyGUI:
 
         # ── Appearance tab ────────────────────────────────────────────
 
-        sec = Section(app, "Node Appearance")
+        sec = Section(inner, "Node Appearance")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         row = ttk.Frame(s)
@@ -506,20 +496,10 @@ class GalaxyGUI:
 
         # ── Edge Appearance ───────────────────────────────────────────
         sec = Section(inner, "Edge Appearance")
-        ColorEntry(s, "Flat color  (mode: none)", self.v_node_color, label_width=LW).pack(fill="x")
-        ColorEntry(s, "Gradient low",             self.v_grad_low,   label_width=LW).pack(fill="x")
-        ColorEntry(s, "Gradient high",            self.v_grad_high,  label_width=LW).pack(fill="x")
-        ttk.Label(s, text="  Gradient low→high maps to low→high data values for all\n"
-                           "  gradient color modes (arm_dist, r, pop, admin_lvl, admin_dist).",
-                  foreground="#888888", wraplength=320).pack(anchor="w", padx=6)
-
-        sec = Section(app, "Edge Appearance")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         ttk.Checkbutton(s, text="Hide edges  (much faster for N > 1 000)",
                         variable=self.v_no_edges).pack(anchor="w", padx=4, pady=2)
-        ColorEntry(s, "Edge color", self.v_edge_color, label_width=LW).pack(fill="x")
-        SliderEntry(s, "Edge width",   self.v_edge_width, 0.1, 5.0, 0.1, label_width=LW).pack(fill="x")
         ColorEntry(s, "Edge color",    self.v_edge_color, label_width=LW).pack(fill="x")
         SliderEntry(s, "Edge width",   self.v_edge_width, 0.1, 5.0, 0.1,  label_width=LW).pack(fill="x")
         SliderEntry(s, "Edge opacity", self.v_edge_alpha, 0.0, 1.0, 0.05, label_width=LW).pack(fill="x")
@@ -538,20 +518,6 @@ class GalaxyGUI:
         nb.add(attr_frame,   text="Attributes")
         nb.add(insp_frame,   text="Inspect & Search")
         nb.add(filter_frame, text="Filter View")
-        """Right panel — four tabs: Attributes, Inspector, Search, Filter."""
-        nb = ttk.Notebook(parent)
-        nb.pack(fill="both", expand=True)
-
-        attr_tab   = ttk.Frame(nb)
-        insp_tab   = ttk.Frame(nb)
-        search_tab = ttk.Frame(nb)
-        filt_tab   = ttk.Frame(nb)
-        nb.add(attr_tab,   text="Attributes")
-        nb.add(insp_tab,   text="Inspector")
-        nb.add(search_tab, text="Search")
-        nb.add(filt_tab,   text="Filter")
-
-        attr_inner = self._make_scrollable_tab(attr_tab)
 
         self._build_attributes_tab(attr_frame)
         self._build_inspect_tab(insp_frame)
@@ -564,16 +530,14 @@ class GalaxyGUI:
 
         # ── Attributes tab ────────────────────────────────────────────
 
-        ttk.Button(attr_inner, text="Apply Attributes",
+        ttk.Button(inner, text="Apply Attributes",
                    command=self._on_apply_attrs).pack(fill="x", padx=6, pady=(6, 2))
         ttk.Label(inner,
-                  text="Re-assigns pop/admin without regenerating the spatial layout.",
-        ttk.Label(attr_inner,
                   text="Re-assigns pop/admin without regenerating spatial layout.",
                   foreground="#888888", wraplength=330,
                   justify="left").pack(padx=6, pady=(0, 4))
 
-        sec = Section(attr_inner, "Population")
+        sec = Section(inner, "Population")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         ttk.Label(s, text=(
@@ -589,7 +553,7 @@ class GalaxyGUI:
         ttk.Label(s, text="  0=no clustering  |  1=moderate  |  5=strong neighbourhood",
                   foreground="#888888").pack(anchor="w", padx=6)
 
-        sec = Section(attr_inner, "Admin Levels")
+        sec = Section(inner, "Admin Levels")
         sec.pack(fill="x", padx=4, pady=3)
         s = sec.inner
         ttk.Label(s, text=(
