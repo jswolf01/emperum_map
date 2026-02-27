@@ -339,14 +339,6 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
             zorder=6,
         )
     else:
-        # Colormaps for worldbuilding attributes
-        _POP_CMAP   = LinearSegmentedColormap.from_list(
-            "pop", ["#0a0a1a", "#1a3a6a", "#2266cc", "#44aaff", "#ffffff"])
-        _ADMIN_CMAP = LinearSegmentedColormap.from_list(
-            "admin", ["#111111", "#331100", "#884400", "#cc6600", "#ff9900", "#ffff44"])
-        _DIST_CMAP  = LinearSegmentedColormap.from_list(
-            "adist", ["#ffff44", "#66aa22", "#116633", "#003322", "#000a0a"])
-
         vmin_val: Optional[float] = None
         vmax_val: Optional[float] = None
 
@@ -355,26 +347,21 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
         elif color_by == "r" and "r" in nodes.columns:
             c, cmap, clabel = nodes["r"].values[vis], grad_cmap, "Radius"
         elif color_by == "pop" and "pop" in nodes.columns:
-            c, cmap, clabel = nodes["pop"].values[vis], _POP_CMAP, "Population"
-            # Anchor to the full semantic range so every colour level is correct
-            # regardless of whether all values 0-100 are present in this dataset.
+            c, cmap, clabel = nodes["pop"].values[vis], grad_cmap, "Population"
             vmin_val, vmax_val = 0.0, 100.0
         elif color_by == "admin_lvl" and "admin_lvl" in nodes.columns:
-            c, cmap, clabel = nodes["admin_lvl"].values[vis], _ADMIN_CMAP, "Admin level"
-            # Anchor: 0 = no admin centre (darkest), 5 = top-tier capital (brightest).
-            # Without this, matplotlib auto-normalises to whichever levels happen to
-            # exist and a level-4 node would incorrectly get the level-5 colour.
+            c, cmap, clabel = nodes["admin_lvl"].values[vis], grad_cmap, "Admin level"
             vmin_val, vmax_val = 0.0, 5.0
         elif color_by == "admin_dist" and "admin_dist" in nodes.columns:
             raw = nodes["admin_dist"].values.astype(float)
             valid_vals = raw[raw >= 0]
             raw_max = float(valid_vals.max()) + 1 if len(valid_vals) > 0 else 1.0
             raw[raw < 0] = raw_max   # map unreachable (-1) to just beyond the max
-            c, cmap, clabel = raw[vis], _DIST_CMAP, "Admin distance (hops)"
+            c, cmap, clabel = raw[vis], grad_cmap, "Admin distance (hops)"
             vmin_val, vmax_val = 0.0, raw_max
         elif color_by == "is_choke" and "is_choke" in nodes.columns:
             c = nodes["is_choke"].values[vis].astype(float)
-            cmap, clabel = "Reds", "Chokepoint"
+            cmap, clabel = grad_cmap, "Chokepoint"
             vmin_val, vmax_val = 0.0, 1.0
         else:
             c = args.node_color
