@@ -1445,6 +1445,9 @@ class GalaxyGenerator:
         # is_choke — betweenness-based exclusive-access bottlenecks
         nodes["is_choke"] = self._assign_chokepoints(nodes, edges, degree)
 
+        # degree — edge count per node (useful for filter/search)
+        nodes["degree"] = degree
+
         n_hier = int((nodes["hierarchy"] >= 0).sum())
         n_choke = int(nodes["is_choke"].sum())
         print(f"  {int((pop > 0).sum()):,} inhabited systems, "

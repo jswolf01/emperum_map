@@ -698,7 +698,7 @@ class GalaxyGUI:
         ttk.Combobox(
             row, textvariable=self.v_search_attr,
             values=["name", "uid", "pop", "admin_lvl", "admin_dist",
-                    "hierarchy", "id"],
+                    "hierarchy", "is_choke", "degree", "id"],
             state="readonly", width=12,
         ).pack(side="left")
 
@@ -812,7 +812,7 @@ class GalaxyGUI:
     def _add_filter_row(self, container: ttk.Frame) -> None:
         """Append a new condition row to the filter container."""
         _ATTRS = ["pop", "admin_lvl", "admin_dist", "hierarchy",
-                  "r", "arm_dist", "name", "uid", "id"]
+                  "is_choke", "degree", "r", "arm_dist", "name", "uid", "id"]
         _OPS   = ["=", ">", "<", ">=", "<=", "between", "contains"]
 
         attr_var = tk.StringVar(value="pop")
@@ -900,7 +900,7 @@ class GalaxyGUI:
                     try:
                         mask = col == float(val)
                     except ValueError:
-                        mask = col.astype(str) == val
+                        mask = col.astype(str).str.lower() == val.lower()
                 elif op == ">":
                     mask = col.astype(float) > float(val)
                 elif op == "<":
@@ -1588,7 +1588,7 @@ class GalaxyGUI:
                 try:
                     mask = col == float(query)
                 except ValueError:
-                    mask = col.astype(str) == query
+                    mask = col.astype(str).str.lower() == query.lower()
             elif op == ">":
                 mask = col.astype(float) > float(query)
             elif op == "<":
