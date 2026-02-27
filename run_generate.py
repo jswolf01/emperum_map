@@ -122,6 +122,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Acceptance-probability multiplier (increase if sampling is slow).",
     )
 
+    # ── Chokepoints ───────────────────────────────────────────────────────
+    p.add_argument(
+        "--choke_count", type=int, default=0,
+        metavar="N",
+        help=(
+            "Chokepoint count.  0 = none (default); -1 = random-chance mode "
+            "(see --choke_chance); N>0 = exactly N chokepoints."
+        ),
+    )
+    p.add_argument(
+        "--choke_chance", type=float, default=0.3,
+        metavar="P",
+        help=(
+            "Probability [0, 1] that any chokepoints spawn when "
+            "--choke_count=-1.  Ignored otherwise."
+        ),
+    )
+    p.add_argument(
+        "--choke_sep", type=int, default=-1,
+        metavar="H",
+        help=(
+            "Minimum hop-distance between chokepoints.  "
+            "-1 = auto (max(3, diameter // 5))."
+        ),
+    )
+
     # ── Reproducibility ───────────────────────────────────────────────────
     p.add_argument(
         "--seed", type=int, default=7,
@@ -163,6 +189,9 @@ def main() -> None:
         seed                   = args.seed,
         out_dir                = args.out_dir,
         write_gexf             = not args.no_gexf,
+        choke_count            = args.choke_count,
+        choke_chance           = args.choke_chance,
+        choke_sep              = args.choke_sep,
     )
 
     # Print config so the user can confirm parameters before waiting

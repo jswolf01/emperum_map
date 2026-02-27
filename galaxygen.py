@@ -140,6 +140,22 @@ class GalaxyConfig:
     #   2.0+ = strong separation, fewer centres will fit.
     admin_sep_scale: float = 1.5
 
+    # ---- chokepoints ----
+    # Chokepoints are nodes with unusually high betweenness centrality —
+    # they provide exclusive access to large sectors of the galaxy.
+    #
+    # choke_count:  0  = disabled (default, no chokepoints)
+    #              -1  = random-chance mode: roll choke_chance to decide if
+    #                    any chokepoints spawn, then pick a random count
+    #             N>0  = designate exactly N chokepoints
+    choke_count: int = 0
+    # choke_chance: probability [0, 1] that chokepoints appear when
+    #   choke_count == -1.  Ignored for other choke_count values.
+    choke_chance: float = 0.3
+    # choke_sep: minimum hop-distance enforced between any two chokepoints.
+    #   -1 = auto (derived from graph diameter: max(3, diameter // 5))
+    choke_sep: int = -1
+
 
 # ---------------------------------------------------------------------------
 # Geometry helpers
@@ -1235,6 +1251,140 @@ class GalaxyGenerator:
 
         return admin_lvl
 
+    def _estimate_betweenness(
+        self,
+        adj: list[list[int]],
+        n: int,
+        connected_idx: np.ndarray,
+    ) -> np.ndarray:
+        """Approximate betweenness centrality via sampled Brandes BFS.
+
+        Runs the full Brandes single-source algorithm on a random sample of
+        ``k = min(n_conn, max(30, 2 × √n_conn))`` source nodes.  The results
+        are scaled by ``n_conn / k`` so the magnitude approximates true
+        betweenness up to that sampling factor.
+
+        Returns
+        -------
+        btw : np.ndarray, shape (n,)
+            Approximate betweenness scores.  Isolated nodes stay at 0.
+        """
+        n_conn  = len(connected_idx)
+        k       = min(n_conn, max(30, int(n_conn ** 0.5) * 2))
+        sources = self._rng.choice(connected_idx, size=k, replace=False)
+
+        btw = np.zeros(n, dtype=np.float64)
+
+        for s_raw in sources:
+            s = int(s_raw)
+
+            sigma: list[int]   = [0]  * n   # shortest-path counts
+            dist:  list[int]   = [-1] * n   # hop distances (-1 = unvisited)
+            delta: list[float] = [0.0] * n  # pair-dependency accumulator
+            pred:  list[list[int]] = [[] for _ in range(n)]
+
+            sigma[s] = 1
+            dist[s]  = 0
+            order: list[int] = []
+            q = deque([s])
+
+            # Forward BFS — build shortest-path DAG
+            while q:
+                u = q.popleft()
+                order.append(u)
+                for v in adj[u]:
+                    if dist[v] < 0:          # first visit
+                        dist[v] = dist[u] + 1
+                        q.append(v)
+                    if dist[v] == dist[u] + 1:   # on a shortest path
+                        sigma[v] += sigma[u]
+                        pred[v].append(u)
+
+            # Backward accumulation (Brandes)
+            for v in reversed(order):
+                for u in pred[v]:
+                    if sigma[v] > 0:
+                        delta[u] += (sigma[u] / sigma[v]) * (1.0 + delta[v])
+                if v != s:
+                    btw[v] += delta[v]
+
+        # Scale to compensate for sampling fraction
+        if k < n_conn:
+            btw *= (n_conn / k)
+
+        return btw
+
+    def _assign_chokepoints(
+        self,
+        nodes: pd.DataFrame,
+        edges: pd.DataFrame,
+        degree: np.ndarray,
+    ) -> np.ndarray:
+        """Designate chokepoint nodes based on betweenness centrality.
+
+        A chokepoint is a node that lies on a disproportionate number of
+        shortest paths through the network — it provides *exclusive access*
+        to large sectors of the galaxy.  Chokepoints are spread out so that
+        no two are within ``choke_sep`` hops of each other.
+
+        Parameters
+        ----------
+        choke_count == 0  → all False (disabled, default)
+        choke_count == -1 → random-chance mode: roll ``choke_chance``; if it
+                            succeeds pick a random count ∈ [1, n_conn//300+1]
+        choke_count > 0   → exactly that many chokepoints
+
+        Returns
+        -------
+        is_choke : np.ndarray[bool], shape (n,)
+        """
+        cfg      = self.cfg
+        n        = len(nodes)
+        is_choke = np.zeros(n, dtype=bool)
+
+        if cfg.choke_count == 0:
+            return is_choke
+
+        connected_mask = degree > 0
+        connected_idx  = np.where(connected_mask)[0]
+        n_connected    = len(connected_idx)
+        if n_connected < 3:
+            return is_choke
+
+        # Determine target count ────────────────────────────────────────────
+        if cfg.choke_count == -1:
+            if self._rng.random() >= cfg.choke_chance:
+                print("  Chokepoints: random roll failed — none placed.")
+                return is_choke
+            max_count = max(1, n_connected // 300)
+            count = int(self._rng.integers(1, max_count + 2))
+        else:
+            count = int(cfg.choke_count)
+
+        count = max(1, min(count, n_connected))
+
+        # Build graph structures ────────────────────────────────────────────
+        adj = self._build_adj_list(n, edges)
+
+        if cfg.choke_sep == -1:
+            diameter, _ = self._estimate_graph_spread(adj, connected_idx)
+            sep_radius  = max(3, int(diameter // 5))
+        else:
+            sep_radius = max(1, int(cfg.choke_sep))
+
+        # Score by approximate betweenness centrality ───────────────────────
+        scores = self._estimate_betweenness(adj, n, connected_idx)
+
+        # Greedy spaced placement ───────────────────────────────────────────
+        placed = self._greedy_spaced_placement(
+            adj, scores, count, sep_radius, excluded=set()
+        )
+
+        is_choke[placed] = True
+        print(f"  {len(placed)} chokepoint(s) designated "
+              f"(target {count}, sep ≥ {sep_radius} hops).")
+        return is_choke
+
     def assign_attributes(
         self,
         nodes: pd.DataFrame,
@@ -1253,8 +1403,9 @@ class GalaxyGenerator:
 
         Returns
         -------
-        nodes : DataFrame with uid, name, pop, admin_lvl, admin_dist, hierarchy
-                columns added (or replaced if already present).
+        nodes : DataFrame with uid, name, pop, admin_lvl, admin_dist,
+                hierarchy, is_choke columns added (or replaced if already
+                present).
         """
         n = len(nodes)
         degree = compute_degree(n, edges)
@@ -1282,10 +1433,15 @@ class GalaxyGenerator:
         # hierarchy requires admin_lvl, pop, and edges
         nodes["hierarchy"] = compute_hierarchy(nodes, edges)
 
+        # is_choke — betweenness-based exclusive-access bottlenecks
+        nodes["is_choke"] = self._assign_chokepoints(nodes, edges, degree)
+
         n_hier = int((nodes["hierarchy"] >= 0).sum())
+        n_choke = int(nodes["is_choke"].sum())
         print(f"  {int((pop > 0).sum()):,} inhabited systems, "
               f"{int((admin_lvl > 0).sum()):,} admin centres, "
-              f"{n_hier:,} nodes placed in hierarchies.")
+              f"{n_hier:,} nodes placed in hierarchies, "
+              f"{n_choke} chokepoint(s).")
         return nodes
 
     # ------------------------------------------------------------------

@@ -279,6 +279,11 @@ class GalaxyGUI:
         self.v_admin_coverage_scale = dv(value=1.0)
         self.v_admin_sep_scale      = dv(value=1.5)
 
+        # ── Chokepoints ───────────────────────────────────────────────────
+        self.v_choke_count  = iv(value=0)
+        self.v_choke_chance = dv(value=0.3)
+        self.v_choke_sep    = iv(value=-1)
+
         # ── Node inspector (editable fields for selected node) ────────────
         self.v_insp_uid       = sv(value="")
         self.v_insp_name      = sv(value="")
@@ -482,7 +487,7 @@ class GalaxyGUI:
         ttk.Combobox(
             row, textvariable=self.v_color_by,
             values=["arm_dist", "r", "pop", "admin_lvl", "admin_dist",
-                    "hierarchy", "none"],
+                    "hierarchy", "is_choke", "none"],
             state="readonly", width=11,
         ).pack(side="left")
         SliderEntry(s, "Node size", self.v_node_size, 0.1, 20.0, 0.1, label_width=LW).pack(fill="x")
@@ -596,6 +601,36 @@ class GalaxyGUI:
             "  Min-separation = coverage_radius × this.  "
             "  Lower = centres can cluster; higher = forced wide spread."
         ), foreground="#888888", wraplength=320).pack(anchor="w", padx=6)
+
+        sec = Section(inner, "Chokepoints")
+        sec.pack(fill="x", padx=4, pady=3)
+        s = sec.inner
+        ttk.Label(s, text=(
+            "Nodes that provide exclusive access to large sectors.  "
+            "0 = none (default).  −1 = random-chance mode.  N = exactly N."
+        ), wraplength=320, justify="left", foreground="#aaaaaa").pack(
+            padx=4, pady=(2, 6))
+
+        row = ttk.Frame(s)
+        row.pack(fill="x", pady=1)
+        ttk.Label(row, text="Count  (0 / −1 / N)", width=RLW, anchor="w").pack(
+            side="left", padx=(4, 2))
+        ttk.Spinbox(row, from_=-1, to=10_000, increment=1,
+                    textvariable=self.v_choke_count, width=7).pack(side="left")
+
+        SliderEntry(s, "Random chance", self.v_choke_chance,
+                    0.0, 1.0, 0.05, label_width=RLW).pack(fill="x")
+        ttk.Label(s, text="  P(chokepoints spawn) when count = −1",
+                  foreground="#888888").pack(anchor="w", padx=6)
+
+        row = ttk.Frame(s)
+        row.pack(fill="x", pady=1)
+        ttk.Label(row, text="Min sep hops  (−1=auto)", width=RLW, anchor="w").pack(
+            side="left", padx=(4, 2))
+        ttk.Spinbox(row, from_=-1, to=100, increment=1,
+                    textvariable=self.v_choke_sep, width=5).pack(side="left")
+        ttk.Label(s, text="  Auto = max(3, diameter ÷ 5)",
+                  foreground="#888888").pack(anchor="w", padx=6)
 
     def _build_inspect_tab(self, parent: ttk.Frame) -> None:
         """Node inspector + search in a scrollable tab."""
@@ -1020,6 +1055,10 @@ class GalaxyGUI:
             # Admin spatial spacing
             admin_coverage_scale   = self.v_admin_coverage_scale.get(),
             admin_sep_scale        = self.v_admin_sep_scale.get(),
+            # Chokepoints
+            choke_count            = self.v_choke_count.get(),
+            choke_chance           = self.v_choke_chance.get(),
+            choke_sep              = self.v_choke_sep.get(),
         )
 
     def _build_plot_args(self,
