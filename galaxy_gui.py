@@ -259,6 +259,7 @@ class GalaxyGUI:
         self.v_edge_alpha             = dv(value=0.35)
 
         # ── Population ───────────────────────────────────────────────────
+        self.v_pop_mean           = dv(value=50.0)
         self.v_pop_core_dispersal = dv(value=1.0)
         self.v_pop_dispersal      = dv(value=1.0)
 
@@ -548,6 +549,10 @@ class GalaxyGUI:
             "pop=0 for isolated nodes.  Connected nodes follow a bell curve "
             "modified by galactic position and neighbourhood clustering."
         ), wraplength=320, justify="left", foreground="#aaaaaa").pack(padx=4, pady=(2, 6))
+        SliderEntry(s, "Mean pop", self.v_pop_mean,
+                    1.0, 99.0, 1.0, label_width=RLW).pack(fill="x")
+        ttk.Label(s, text="  50=balanced  |  <50=sparse galaxy  |  >50=dense galaxy",
+                  foreground="#888888").pack(anchor="w", padx=6)
         SliderEntry(s, "Core dispersal", self.v_pop_core_dispersal,
                     0.0, 5.0, 0.1, label_width=RLW).pack(fill="x")
         ttk.Label(s, text="  0=uniform  |  1=moderate core-high  |  5=extreme core bias",
@@ -1038,6 +1043,7 @@ class GalaxyGUI:
             out_dir                = self.v_out_dir.get(),
             write_gexf             = self.v_write_gexf.get(),
             # Population
+            pop_mean               = self.v_pop_mean.get(),
             pop_core_dispersal     = self.v_pop_core_dispersal.get(),
             pop_dispersal          = self.v_pop_dispersal.get(),
             # Admin exact counts

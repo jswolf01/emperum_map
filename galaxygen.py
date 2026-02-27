@@ -107,6 +107,11 @@ class GalaxyConfig:
     write_gexf: bool = True      # attempt GEXF export (requires networkx)
 
     # ---- population parameters ----
+    # pop_mean: mean of the base Normal distribution for connected-node pop
+    #   before spatial effects are applied.  50 = balanced (default); lower
+    #   values skew the galaxy toward sparse/low-pop systems; higher values
+    #   skew toward densely-populated systems.  Range [1, 99].
+    pop_mean: float = 50.0
     # pop_core_dispersal: 0 = no radial gradient (uniform distribution across
     #   disk); 1 = moderate core-concentration (inner systems tend higher pop);
     #   values > 1 = stronger core bias.
@@ -934,7 +939,9 @@ class GalaxyGenerator:
         Algorithm
         ---------
         1. Isolated nodes (degree = 0) receive pop = 0.
-        2. Connected nodes start with independent samples from Normal(50, 18).
+        2. Connected nodes start with independent samples from Normal(pop_mean, 18).
+           pop_mean defaults to 50; set it lower to skew toward sparse systems or
+           higher to skew toward densely-populated ones.
         3. A radial bonus shifts inner nodes toward higher values:
               radial_bonus = (1 − r/r_disk) × 40 × pop_core_dispersal
         4. Spatial clustering: blends each node's score with a weighted average
@@ -946,8 +953,8 @@ class GalaxyGenerator:
         r = nodes["r"].values
         connected = degree > 0
 
-        # Step 2: base bell-curve scores
-        raw = self._rng.normal(50.0, 18.0, n)
+        # Step 2: base bell-curve scores centred on pop_mean
+        raw = self._rng.normal(float(cfg.pop_mean), 18.0, n)
 
         # Step 3: radial bonus
         r_norm = np.clip(r / max(cfg.r_disk, 1e-9), 0.0, 1.0)

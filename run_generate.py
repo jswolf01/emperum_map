@@ -122,6 +122,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Acceptance-probability multiplier (increase if sampling is slow).",
     )
 
+    # ── Population ────────────────────────────────────────────────────────
+    p.add_argument(
+        "--pop_mean", type=float, default=50.0,
+        metavar="M",
+        help=(
+            "Mean of the base population bell curve for connected nodes [1-99].  "
+            "50 = balanced (default); lower = sparse/low-pop galaxy; "
+            "higher = densely-populated galaxy."
+        ),
+    )
+
     # ── Chokepoints ───────────────────────────────────────────────────────
     p.add_argument(
         "--choke_count", type=int, default=0,
@@ -186,6 +197,7 @@ def main() -> None:
         arm_base               = args.arm_base,
         r_scale                = args.r_scale,
         boost                  = args.boost,
+        pop_mean               = args.pop_mean,
         seed                   = args.seed,
         out_dir                = args.out_dir,
         write_gexf             = not args.no_gexf,
