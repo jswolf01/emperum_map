@@ -495,8 +495,7 @@ class GalaxyGUI:
         ColorEntry(s,  "Gradient low  (low value)",  self.v_grad_low,   label_width=LW).pack(fill="x")
         ColorEntry(s,  "Gradient high  (high value)", self.v_grad_high,  label_width=LW).pack(fill="x")
         ttk.Label(s, text=(
-            "  Gradient colors apply to arm_dist and r modes.\n"
-            "  Other modes use built-in semantic colormaps."
+            "  Gradient colors apply to all non-hierarchy color modes."
         ), foreground="#888888", wraplength=310, justify="left").pack(anchor="w", padx=6)
 
         # ── Edge Appearance ───────────────────────────────────────────

@@ -1013,7 +1013,9 @@ class GalaxyGenerator:
             if cfg.admin_count_5 >= 0:
                 n5 = cfg.admin_count_5
 
-        # Cap total at available connected nodes
+        # Cap total at available connected nodes.
+        # Scale all levels proportionally, but always keep at least one
+        # level-1 node so the hierarchy system has a root to propagate from.
         total = n1 + n2 + n3 + n4 + n5
         if total > n_connected:
             scale = n_connected / max(total, 1)
@@ -1021,7 +1023,7 @@ class GalaxyGenerator:
             n4 = int(n4 * scale)
             n3 = int(n3 * scale)
             n2 = int(n2 * scale)
-            n1 = max(0, int(n1 * scale))
+            n1 = max(1, int(n1 * scale))
 
         return n5, n4, n3, n2, n1
 
