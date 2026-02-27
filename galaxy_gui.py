@@ -607,10 +607,6 @@ class GalaxyGUI:
         sec.pack(fill="x", padx=4, pady=3)
         self._inspector_section = sec
         s = sec.inner
-        # ── Inspector tab ─────────────────────────────────────────────
-
-        s = ttk.Frame(insp_tab, padding=(4, 4))
-        s.pack(fill="both", expand=True)
 
         ttk.Label(s, text="Click a node on the preview to inspect it.",
                   foreground="#888888", wraplength=320).pack(padx=4, pady=(2, 4))
@@ -651,10 +647,10 @@ class GalaxyGUI:
         ttk.Button(btn_row, text="Deselect",
                    command=self._deselect_node).pack(side="left", padx=4)
 
-        # ── Search tab ────────────────────────────────────────────────
-
-        s = ttk.Frame(search_tab, padding=(4, 4))
-        s.pack(fill="both", expand=True)
+        # ── Search ────────────────────────────────────────────────────
+        sec2 = Section(inner, "Search")
+        sec2.pack(fill="x", padx=4, pady=3)
+        s = sec2.inner
 
         row = ttk.Frame(s)
         row.pack(fill="x", pady=2)
@@ -692,64 +688,6 @@ class GalaxyGUI:
             side="left", padx=4)
         ttk.Label(s, textvariable=self.v_search_result,
                   foreground="#88cc88", wraplength=320).pack(anchor="w", padx=4, pady=2)
-
-        # ── Filter tab (reduced view) ─────────────────────────────────
-
-        s = ttk.Frame(filt_tab, padding=(4, 6))
-        s.pack(fill="both", expand=True)
-
-        ttk.Checkbutton(s, text="Enable reduced view filter",
-                        variable=self.v_filter_active).pack(anchor="w", padx=4, pady=(4, 2))
-        ttk.Label(s,
-                  text="When active, applies the conditions below to show or hide nodes "
-                       "(and their connected edges).",
-                  foreground="#aaaaaa", wraplength=310, justify="left").pack(
-            anchor="w", padx=8, pady=(0, 8))
-
-        _FILT_ATTRS = ["", "pop", "admin_lvl", "admin_dist", "hierarchy",
-                       "arm_dist", "r", "name", "uid"]
-        _FILT_OPS   = ["=", ">", "<", ">=", "<=", "contains"]
-
-        ttk.Label(s, text="Conditions (check box to enable each row):",
-                  foreground="#cccccc").pack(anchor="w", padx=4, pady=(2, 2))
-
-        for i, cond in enumerate(self._filter_conds):
-            row = ttk.Frame(s)
-            row.pack(fill="x", pady=2, padx=4)
-            ttk.Checkbutton(row, variable=cond["enabled"]).pack(side="left")
-            ttk.Combobox(row, textvariable=cond["attr"],
-                         values=_FILT_ATTRS, state="readonly", width=10).pack(
-                side="left", padx=(2, 1))
-            ttk.Combobox(row, textvariable=cond["op"],
-                         values=_FILT_OPS, state="readonly", width=7).pack(
-                side="left", padx=1)
-            ttk.Entry(row, textvariable=cond["val"], width=8).pack(
-                side="left", padx=(1, 0))
-
-        logic_row = ttk.Frame(s)
-        logic_row.pack(fill="x", pady=(8, 2), padx=4)
-        ttk.Label(logic_row, text="Logic between conditions:").pack(
-            side="left", padx=(0, 6))
-        ttk.Radiobutton(logic_row, text="AND",
-                        variable=self.v_filter_logic, value="AND").pack(side="left")
-        ttk.Radiobutton(logic_row, text="OR",
-                        variable=self.v_filter_logic, value="OR").pack(side="left", padx=4)
-
-        mode_row = ttk.Frame(s)
-        mode_row.pack(fill="x", pady=2, padx=4)
-        ttk.Label(mode_row, text="Mode:").pack(side="left", padx=(0, 6))
-        ttk.Radiobutton(mode_row, text="Show only matching",
-                        variable=self.v_filter_mode, value="show_matching").pack(side="left")
-        ttk.Radiobutton(mode_row, text="Hide matching",
-                        variable=self.v_filter_mode, value="hide_matching").pack(
-            side="left", padx=4)
-
-        ttk.Button(s, text="Apply Filter  (re-render)",
-                   command=self._on_apply_filter).pack(anchor="w", padx=4, pady=(10, 2))
-        ttk.Label(s,
-                  text="Tip: Preview also re-applies the active filter automatically.",
-                  foreground="#888888", wraplength=310, justify="left").pack(
-            anchor="w", padx=8)
 
     # ── Filter / Reduced View tab ─────────────────────────────────────────
 
