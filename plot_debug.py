@@ -99,7 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Skip drawing edges (much faster for large graphs).")
     p.add_argument("--color_by",
                    choices=["arm_dist", "r", "none", "pop", "admin_lvl", "admin_dist",
-                            "hierarchy"],
+                            "hierarchy", "is_choke"],
                    default="arm_dist",
                    help="Node colouring scheme.")
 
@@ -372,6 +372,10 @@ def draw_galaxy(args: argparse.Namespace) -> plt.Figure:
             raw[raw < 0] = raw_max   # map unreachable (-1) to just beyond the max
             c, cmap, clabel = raw[vis], _DIST_CMAP, "Admin distance (hops)"
             vmin_val, vmax_val = 0.0, raw_max
+        elif color_by == "is_choke" and "is_choke" in nodes.columns:
+            c = nodes["is_choke"].values[vis].astype(float)
+            cmap, clabel = "Reds", "Chokepoint"
+            vmin_val, vmax_val = 0.0, 1.0
         else:
             c = args.node_color
             cmap = None
